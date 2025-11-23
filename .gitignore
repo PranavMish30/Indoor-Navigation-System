@@ -1,2 +1,6 @@
-/__pycache__
-/venv
+.venv
+__pycache__
+0F.png
+1F.png
+coordinate_system.md
+project_tech_summary.md
