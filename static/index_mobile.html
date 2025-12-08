@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Indoor Navigation</title>
+    <link rel="stylesheet" href="static/style_mobile.css">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-content">
+            <h2>Loading...</h2>
+            <div class="spinner"></div>
+        </div>
+    </div>
+    
+    <!-- Main Map Container -->
+    <div id="mapContainer" class="map-container" style="opacity: 0; transition: opacity 0.5s;">
+        
+        <!-- Floating Action Buttons -->
+        <div class="fab-container">
+            <button class="fab fab-primary" id="getCurrentLocationBtn">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>
+            <button class="fab fab-secondary" id="startTrackingBtn">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M12 2v20M2 12h20"></path>
+                    <circle cx="12" cy="12" r="7"></circle>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Floor Selector (Floating) -->
+        <div class="floor-selector">
+            <button class="floor-btn" id="floorUpBtn">▲</button>
+            <div class="floor-display" id="currentFloorDisplay">F0</div>
+            <button class="floor-btn" id="floorDownBtn">▼</button>
+        </div>
+
+        <!-- Map Canvas -->
+        <div class="map-canvas-wrapper" id="mapWrapper">
+            <svg id="floorPlan" viewBox="0 0 2450 500" preserveAspectRatio="xMidYMid meet">
+                <!-- Background -->
+                <rect width="2450" height="500" fill="#0f172a"/>
+                
+                <!-- Floor sections -->
+                <g id="sections"></g>
+                
+                <!-- POI Icons -->
+                <g id="poiIcons"></g>
+                
+                <!-- Reference points -->
+                <g id="refPoints"></g>
+                
+                <!-- Navigation path -->
+                <g id="navPath"></g>
+                
+                <!-- Position history trail -->
+                <g id="positionTrail"></g>
+                
+                <!-- Nearest neighbors -->
+                <g id="nearestNeighbors"></g>
+                
+                <!-- Current position -->
+                <g id="currentPos"></g>
+            </svg>
+        </div>
+
+        <!-- Bottom Sheet -->
+        <div class="bottom-sheet" id="bottomSheet">
+            <div class="bottom-sheet-handle"></div>
+            
+            <div class="bottom-sheet-content">
+                <!-- Status Messages -->
+                <div id="scanStatus" class="status hidden"></div>
+                
+                <!-- Current Position Card -->
+                <div class="info-card">
+                    <h3>📍 Current Position</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="info-label">Floor</span>
+                            <span class="info-value" id="floorValue">-</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Section</span>
+                            <span class="info-value" id="sectionValue">-</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Coordinates</span>
+                            <span class="info-value" id="coordValue">-</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Confidence</span>
+                            <span class="info-value" id="confidenceValue">-</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">APs</span>
+                            <span class="info-value" id="apsValue">-</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Algorithm</span>
+                            <span class="info-value" id="algorithmValue">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Navigation Card -->
+                <div class="info-card">
+                    <h3>🧭 Navigate To</h3>
+                    <div class="nav-controls">
+                        <select id="destinationSelect" class="nav-select"></select>
+                        <button id="navigateBtn" class="nav-btn">Go</button>
+                    </div>
+                    <div id="navStatus" class="nav-status"></div>
+                </div>
+
+                <!-- Nearest Reference Points -->
+                <div class="info-card">
+                    <h3>📡 Nearest Points</h3>
+                    <div id="nearestNeighbors" class="neighbors-list">
+                        <p class="placeholder">Get location to see nearest points</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    
+    <script src="static/app_mobile.js"></script>
+    <select id="floorSelect" style="display:none;"></select>
+    <button id="showRefPoints" style="display:none;"></button>
+    <span id="currentFloor" style="display:none;">0</span>
+    <span id="kalmanValue" style="display:none;">-</span>
+</body>
+</html>

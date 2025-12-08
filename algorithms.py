@@ -373,131 +373,11 @@ class XGBoostPositioning(PositioningAlgorithm):
         return result
 
 
-class DeepNeuralNetwork(PositioningAlgorithm):
-    """Deep Neural Network for indoor positioning"""
-    def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str]):
-        super().__init__(reference_points, all_bssids)
-        self.model_coords = None
-        self.model_floor = None
-        self.model_section = None
-        self.scaler = None
-        self.train()
-
-    def train(self):
-        try:
-            from sklearn.neural_network import MLPRegressor, MLPClassifier
-            from sklearn.preprocessing import StandardScaler, LabelEncoder
-        except ImportError:
-            raise ImportError("scikit-learn not installed properly")
-        
-        X = []
-        y_x = []
-        y_y = []
-        y_floor = []
-        y_section = []
-        
-        for idx, ref_point in self.reference_points.iterrows():
-            rssi_vector = self.get_reference_rssi_vector(ref_point)
-            X.append(rssi_vector)
-            y_x.append(ref_point['x'])
-            y_y.append(ref_point['y'])
-            y_floor.append(ref_point['floor'])
-            y_section.append(ref_point['section'])
-        
-        X = np.array(X)
-        
-        # Normalize RSSI values
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
-        
-        # Encode sections
-        self.section_encoder = LabelEncoder()
-        y_section_encoded = self.section_encoder.fit_transform(y_section)
-        
-        # Combine x and y for joint prediction
-        y_coords = np.column_stack([y_x, y_y])
-        
-        # Deep Neural Network for coordinates
-        self.model_coords = MLPRegressor(
-            hidden_layer_sizes=(256, 128, 64, 32),
-            activation='relu',
-            solver='adam',
-            alpha=0.001,
-            batch_size=32,
-            learning_rate='adaptive',
-            learning_rate_init=0.001,
-            max_iter=500,
-            early_stopping=True,
-            validation_fraction=0.1,
-            random_state=42
-        )
-        
-        # Deep Neural Network for floor
-        self.model_floor = MLPClassifier(
-            hidden_layer_sizes=(128, 64, 32),
-            activation='relu',
-            solver='adam',
-            alpha=0.001,
-            batch_size=32,
-            learning_rate='adaptive',
-            learning_rate_init=0.001,
-            max_iter=300,
-            early_stopping=True,
-            validation_fraction=0.1,
-            random_state=42
-        )
-        
-        # Deep Neural Network for section
-        self.model_section = MLPClassifier(
-            hidden_layer_sizes=(128, 64, 32),
-            activation='relu',
-            solver='adam',
-            alpha=0.001,
-            batch_size=32,
-            learning_rate='adaptive',
-            learning_rate_init=0.001,
-            max_iter=300,
-            early_stopping=True,
-            validation_fraction=0.1,
-            random_state=42
-        )
-        
-        self.model_coords.fit(X_scaled, y_coords)
-        self.model_floor.fit(X_scaled, y_floor)
-        self.model_section.fit(X_scaled, y_section_encoded)
-
-    def estimate_position(self, current_scan: Dict[str, int]) -> Dict:
-        current_vector = self.prepare_rssi_vector(current_scan).reshape(1, -1)
-        current_vector_scaled = self.scaler.transform(current_vector)
-        
-        coords = self.model_coords.predict(current_vector_scaled)[0]
-        x = float(coords[0])
-        y = float(coords[1])
-        
-        floor = int(self.model_floor.predict(current_vector_scaled)[0])
-        section_encoded = self.model_section.predict(current_vector_scaled)[0]
-        section = str(self.section_encoder.inverse_transform([section_encoded])[0])
-        
-        floor_proba = self.model_floor.predict_proba(current_vector_scaled)[0]
-        section_proba = self.model_section.predict_proba(current_vector_scaled)[0]
-        confidence = (max(floor_proba) + max(section_proba)) / 2 * 100
-        
-        result = {
-            'x': float(x),
-            'y': float(y),
-            'floor': int(floor),
-            'section': str(section),
-            'algorithm': 'Deep-Neural-Network',
-            'confidence': float(confidence),
-            'floor_confidence': float(max(floor_proba) * 100),
-            'section_confidence': float(max(section_proba) * 100)
-        }
-        return result
-
-
 class KalmanFilter:
     """Kalman Filter for smoothing position estimates"""
-    def __init__(self, process_variance=0.01, measurement_variance=0.5):
+    def __init__(self, process_variance=0.05, measurement_variance=0.3):
+        # Increased process_variance: system changes more (walking)
+        # Decreased measurement_variance: trust measurements more
         self.process_variance = process_variance
         self.measurement_variance = measurement_variance
         self.reset()
@@ -539,7 +419,8 @@ class SmartEnsemble(PositioningAlgorithm):
     def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str], algorithms: List):
         super().__init__(reference_points, all_bssids)
         self.algorithms = algorithms
-        self.kalman_filter = KalmanFilter()
+        # More responsive Kalman filter for real-time tracking
+        self.kalman_filter = KalmanFilter(process_variance=0.08, measurement_variance=0.25)
     
     def estimate_position(self, current_scan: Dict[str, int], use_kalman=True) -> Dict:
         # Get predictions from all algorithms
@@ -554,9 +435,15 @@ class SmartEnsemble(PositioningAlgorithm):
         if not predictions:
             raise ValueError("No algorithm produced a valid prediction")
         
-        # Weight by confidence
-        total_confidence = sum(p['confidence'] for p in predictions)
-        weights = [p['confidence'] / total_confidence for p in predictions]
+        # Filter out low-confidence predictions (< 70%)
+        high_conf_predictions = [p for p in predictions if p['confidence'] >= 70]
+        if high_conf_predictions:
+            predictions = high_conf_predictions
+        
+        # Weight by SQUARED confidence (favor high-confidence predictions more)
+        confidence_squared = [p['confidence'] ** 2 for p in predictions]
+        total_confidence = sum(confidence_squared)
+        weights = [c / total_confidence for c in confidence_squared]
         
         # Weighted average for coordinates
         x_weighted = sum(p['x'] * w for p, w in zip(predictions, weights))

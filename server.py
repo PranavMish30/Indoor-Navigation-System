@@ -4,21 +4,18 @@ from flask_cors import CORS
 import subprocess
 import re
 import os
+import time
+from functools import lru_cache
 
 from preprocessing import FingerprintDatabase
-from algorithms import KNN, WeightedKNN, RandomForestPositioning, HybridWKNNRF, XGBoostPositioning, DeepNeuralNetwork, SmartEnsemble, KalmanFilter
+from algorithms import HybridWKNNRF, SmartEnsemble, KalmanFilter
 from navigation import build_graph, find_closest_node, shortest_path
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
 
 db = None
-knn_algo = None
-wknn_algo = None
-rf_algo = None
 hybrid_algo = None
-xgb_algo = None
-dnn_algo = None
 ensemble_algo = None
 nav_graph = None
 
@@ -30,7 +27,7 @@ with open('pois.json', 'r', encoding='utf-8') as f:
     POIS = json.load(f)
 
 def initialize_system():
-    global db, knn_algo, wknn_algo, rf_algo, hybrid_algo, xgb_algo, dnn_algo, ensemble_algo, nav_graph
+    global db, hybrid_algo, ensemble_algo, nav_graph
     print("\n" + "="*70)
     print("🚀 Initializing Indoor Positioning System")
     print("="*70)
@@ -40,17 +37,10 @@ def initialize_system():
     db.create_reference_points()
     db.get_stats()
     print("\n🔧 Initializing positioning algorithms...")
-    knn_algo = KNN(db.reference_points, db.all_bssids, k=3)
-    wknn_algo = WeightedKNN(db.reference_points, db.all_bssids, k=4)
-    rf_algo = RandomForestPositioning(db.reference_points, db.all_bssids)
     hybrid_algo = HybridWKNNRF(db.reference_points, db.all_bssids, k=4)
-    print("⚙️  Training advanced algorithms...")
-    xgb_algo = XGBoostPositioning(db.reference_points, db.all_bssids)
-    print("   ✓ XGBoost trained")
-    dnn_algo = DeepNeuralNetwork(db.reference_points, db.all_bssids)
-    print("   ✓ Deep Neural Network trained")
-    ensemble_algo = SmartEnsemble(db.reference_points, db.all_bssids, [wknn_algo, rf_algo, xgb_algo, hybrid_algo])
-    print("   ✓ Smart Ensemble initialized")
+    print("   ✓ Hybrid (WKNN + RF) initialized")
+    ensemble_algo = SmartEnsemble(db.reference_points, db.all_bssids, [hybrid_algo])
+    print("   ✓ Smart Ensemble with Kalman Filter initialized")
     nav_graph = build_graph(db.reference_points, pois=POIS)
     print("✅ System initialized successfully!")
     print("="*70 + "\n")
@@ -59,9 +49,16 @@ initialize_system()
 
 @app.route('/')
 def index():
+    # Desktop version (original)
     return send_from_directory('static', 'index.html')
 
+@app.route('/mobile')
+def mobile():
+    # Mobile version (Google Maps style)
+    return send_from_directory('static', 'index_mobile.html')
+
 @app.route('/api/health', methods=['GET'])
+@lru_cache(maxsize=1)
 def health_check():
     return jsonify({
         'status': 'healthy',
@@ -69,7 +66,7 @@ def health_check():
         'total_bssids': len(db.all_bssids),
         'floors': sorted(db.reference_points['floor'].unique().tolist()),
         'sections': sorted(db.reference_points['section'].unique().tolist()),
-        'algorithms': ['knn', 'wknn', 'rf', 'hybrid', 'xgboost', 'dnn', 'ensemble', 'ensemble-kalman']
+        'algorithms': ['hybrid', 'ensemble', 'ensemble-kalman']
     })
 
 @app.route('/api/scan', methods=['GET'])
@@ -137,18 +134,8 @@ def locate():
     
     try:
         # Get position estimate from selected algorithm
-        if algorithm == 'knn':
-            result = knn_algo.estimate_position(current_scan)
-        elif algorithm == 'wknn':
-            result = wknn_algo.estimate_position(current_scan)
-        elif algorithm == 'rf':
-            result = rf_algo.estimate_position(current_scan)
-        elif algorithm == 'hybrid':
+        if algorithm == 'hybrid':
             result = hybrid_algo.estimate_position(current_scan)
-        elif algorithm == 'xgboost':
-            result = xgb_algo.estimate_position(current_scan)
-        elif algorithm == 'dnn':
-            result = dnn_algo.estimate_position(current_scan)
         elif algorithm == 'ensemble':
             result = ensemble_algo.estimate_position(current_scan, use_kalman=False)
         elif algorithm == 'ensemble-kalman':
@@ -236,8 +223,12 @@ def get_stats():
 
 @app.route('/api/destinations', methods=['GET'])
 def list_destinations():
+    # Reload POIs from file to get latest changes
+    with open('pois.json', 'r', encoding='utf-8') as f:
+        pois = json.load(f)
+    
     result = []
-    for label, info in POIS.items():
+    for label, info in pois.items():
         result.append({
             "label": label,
             "floor": info["floor"],

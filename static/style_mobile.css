@@ -1,0 +1,433 @@
+/* Mobile-First Google Maps Style CSS */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --cyan-light: #06b6d4;
+    --cyan-dark: #0891b2;
+    --emerald-light: #10b981;
+    --emerald-dark: #059669;
+    --slate-900: #0f172a;
+    --slate-800: #1e293b;
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-300: #cbd5e1;
+    --slate-200: #e2e8f0;
+    --pink: #ec4899;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--slate-900);
+    color: var(--slate-200);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Loading Screen */
+.loading-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--slate-900);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.loading-content {
+    text-align: center;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid var(--slate-700);
+    border-top: 4px solid var(--cyan-light);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 20px auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.loading-screen.hidden {
+    display: none;
+}
+
+/* Map Container */
+.map-container {
+    width: 100%;
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Floating Action Buttons */
+.fab-container {
+    position: absolute;
+    bottom: 120px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 100;
+}
+
+.fab {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    transition: all 0.3s ease;
+}
+
+.fab svg {
+    stroke: white;
+}
+
+.fab-primary {
+    background: linear-gradient(135deg, var(--cyan-light), var(--cyan-dark));
+}
+
+.fab-secondary {
+    background: linear-gradient(135deg, var(--emerald-light), var(--emerald-dark));
+}
+
+.fab:active {
+    transform: scale(0.95);
+}
+
+.fab:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.fab.active {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.8);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        box-shadow: 0 0 20px rgba(16, 185, 129, 0.8);
+    }
+    50% {
+        box-shadow: 0 0 30px rgba(16, 185, 129, 1);
+    }
+}
+
+/* Floor Selector */
+.floor-selector {
+    position: absolute;
+    top: 20px;
+    right: 16px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    z-index: 100;
+}
+
+.floor-btn {
+    width: 48px;
+    height: 48px;
+    border: none;
+    background: white;
+    color: var(--slate-700);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.floor-btn:active {
+    background: var(--slate-200);
+}
+
+.floor-display {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    color: var(--slate-900);
+    background: var(--slate-200);
+}
+
+/* Map Canvas */
+.map-canvas-wrapper {
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+    background: var(--slate-900);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+}
+
+#floorPlan {
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    cursor: grab;
+    will-change: transform;
+}
+
+#floorPlan:active {
+    cursor: grabbing;
+}
+
+/* Bottom Sheet */
+.bottom-sheet {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--slate-800);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -2px 20px rgba(0, 0, 0, 0.4);
+    z-index: 200;
+    max-height: 80vh;
+    transition: transform 0.3s ease;
+}
+
+.bottom-sheet-handle {
+    width: 40px;
+    height: 4px;
+    background: var(--slate-600);
+    border-radius: 2px;
+    margin: 12px auto 16px;
+    cursor: grab;
+}
+
+.bottom-sheet-handle:active {
+    cursor: grabbing;
+}
+
+.bottom-sheet-content {
+    padding: 0 16px 24px;
+    overflow-y: auto;
+    max-height: calc(80vh - 32px);
+}
+
+/* Status Messages */
+.status {
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.status.success {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--emerald-light);
+    border: 1px solid var(--emerald-dark);
+}
+
+.status.info {
+    background: rgba(6, 182, 212, 0.2);
+    color: var(--cyan-light);
+    border: 1px solid var(--cyan-dark);
+}
+
+.status.error {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid #dc2626;
+}
+
+.status.hidden {
+    display: none;
+}
+
+/* Info Cards */
+.info-card {
+    background: var(--slate-700);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    border: 1px solid var(--slate-600);
+}
+
+.info-card h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--slate-200);
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.info-label {
+    font-size: 12px;
+    color: var(--slate-300);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.info-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cyan-light);
+}
+
+/* Navigation Controls */
+.nav-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    width: 100%;
+}
+
+.nav-select {
+    flex: 1;
+    min-width: 0; /* Allow flex item to shrink below content size */
+    padding: 12px;
+    background: var(--slate-600);
+    border: 1px solid var(--slate-500);
+    border-radius: 8px;
+    color: var(--slate-200);
+    font-size: 14px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nav-btn {
+    padding: 12px 24px;
+    background: linear-gradient(135deg, var(--emerald-light), var(--emerald-dark));
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    flex-shrink: 0; /* Prevent button from shrinking */
+}
+
+.nav-btn:active {
+    transform: scale(0.98);
+}
+
+.nav-status {
+    padding: 8px;
+    background: var(--slate-600);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--slate-300);
+    min-height: 20px;
+}
+
+/* Nearest Neighbors */
+.neighbors-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.neighbor-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px;
+    background: var(--slate-600);
+    border-radius: 8px;
+    border-left: 3px solid var(--emerald-light);
+}
+
+.neighbor-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.neighbor-label {
+    font-size: 13px;
+    color: var(--slate-300);
+}
+
+.neighbor-coords {
+    font-size: 12px;
+    color: var(--slate-400);
+}
+
+.neighbor-distance {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--emerald-light);
+}
+
+.placeholder {
+    text-align: center;
+    color: var(--slate-400);
+    padding: 20px;
+    font-size: 14px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 360px) {
+    .search-bar {
+        left: 12px;
+        right: 12px;
+    }
+    
+    .fab-container {
+        right: 12px;
+    }
+    
+    .floor-selector {
+        right: 12px;
+    }
+    
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Landscape mode */
+@media (orientation: landscape) and (max-height: 500px) {
+    .fab-container {
+        bottom: 280px;
+    }
+    
+    .bottom-sheet {
+        max-height: 60vh;
+    }
+}

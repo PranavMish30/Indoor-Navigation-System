@@ -18,25 +18,74 @@ let canvas, ctx;
 const SCALE = 100; // 100 pixels per grid unit
 const LEFT_PADDING = 150; // Padding on left side for icons
 
+// Debounce helper for performance
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     canvas = document.getElementById('floorPlan');
     ctx = canvas.getContext('2d');
 
-    document.getElementById('scanBtn').addEventListener('click', scanAndLocate);
-    document.getElementById('autoTrackBtn').addEventListener('click', toggleAutoTracking);
+    document.getElementById('getCurrentLocationBtn').addEventListener('click', getCurrentLocation);
+    document.getElementById('startTrackingBtn').addEventListener('click', toggleAutoTracking);
     document.getElementById('showRefPoints').addEventListener('click', toggleRefPoints);
     document.getElementById('floorSelect').addEventListener('change', event => {
         currentFloor = parseInt(event.target.value, 10);
         document.getElementById('currentFloor').textContent = currentFloor;
         drawFloorPlan();
     });
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey) return; // Avoid conflicts with browser shortcuts
+        
+        switch(e.key.toLowerCase()) {
+            case 's':
+                if (!document.getElementById('getCurrentLocationBtn').disabled) {
+                    e.preventDefault();
+                    getCurrentLocation();
+                }
+                break;
+            case 't':
+                e.preventDefault();
+                toggleAutoTracking();
+                break;
+            case 'r':
+                e.preventDefault();
+                toggleRefPoints();
+                break;
+        }
+    });
 
-    await loadSystemStats();
     await loadReferencePoints();
     populateFloorDropdown();
     await loadDestinations();
     document.getElementById('navigateBtn').addEventListener('click', doNavigation);
     drawFloorPlan();
+    
+    // Hide loading screen and show content
+    setTimeout(() => {
+        const loadingScreen = document.getElementById('loadingScreen');
+        const mapContainer = document.getElementById('mapContainer');
+        if (loadingScreen) {
+            loadingScreen.style.opacity = '0';
+            setTimeout(() => {
+                loadingScreen.style.display = 'none';
+                if (mapContainer) {
+                    mapContainer.style.opacity = '1';
+                }
+            }, 500);
+        }
+    }, 300);
 });
 
 function populateFloorDropdown() {
@@ -66,13 +115,22 @@ async function loadSystemStats() {
 }
 
 async function loadReferencePoints() {
+    // Check if already cached
+    if (Object.keys(referencePointsByFloor).length > 0) {
+        return;
+    }
+    
     const stats = await fetch('/api/stats').then(res=>res.json());
     availableFloors = stats.floors;
     referencePointsByFloor = {};
-    for (const floorNum of availableFloors) {
+    
+    // Load all floors in parallel for better performance
+    const promises = availableFloors.map(async floorNum => {
         const response = await fetch(`/api/reference-points?floor=${floorNum}`);
         referencePointsByFloor[floorNum] = await response.json();
-    }
+    });
+    
+    await Promise.all(promises);
 }
 
 async function loadDestinations() {
@@ -95,24 +153,35 @@ async function loadDestinations() {
     }
 }
 
-async function scanAndLocate() {
-    const scanBtn = document.getElementById('scanBtn');
+// Helper: Format confidence with color coding
+function formatConfidence(confidence) {
+    const percent = confidence.toFixed(1);
+    let color;
+    if (confidence >= 95) color = '#4CAF50';
+    else if (confidence >= 85) color = '#8BC34A';
+    else if (confidence >= 75) color = '#FFC107';
+    else color = '#FF9800';
+    return `<span style="color: ${color}; font-weight: 600;">${percent}%</span>`;
+}
+
+async function getCurrentLocation() {
+    const scanBtn = document.getElementById('getCurrentLocationBtn');
     const statusDiv = document.getElementById('scanStatus');
-    const algorithm = document.getElementById('algorithm').value;
+    const algorithm = 'hybrid'; // Always use hybrid for instant location
 
     // Don't allow manual scan during auto-tracking
     if (isTracking) {
         statusDiv.className = 'status info';
-        statusDiv.textContent = '⚠️ Stop real-time tracking first to perform manual scan';
+        statusDiv.textContent = 'Stop tracking first to get current location';
         statusDiv.classList.remove('hidden');
         return;
     }
 
     scanBtn.disabled = true;
-    scanBtn.textContent = '⏳ Scanning...';
+    scanBtn.textContent = 'Scanning...';
 
     statusDiv.className = 'status info';
-    statusDiv.textContent = '📡 Scanning WiFi networks...';
+    statusDiv.textContent = 'Scanning WiFi networks...';
     statusDiv.classList.remove('hidden');
 
     try {
@@ -120,17 +189,14 @@ async function scanAndLocate() {
         const scanData = await scanResponse.json();
 
         if (scanData.error) throw new Error(scanData.error);
-        displayNetworks(scanData.aps);
 
         if (scanData.count === 0) {
             statusDiv.className = 'status error';
-            statusDiv.textContent = '❌ No BMSIT networks detected. Make sure you are on campus.';
+            statusDiv.textContent = 'No BMSIT networks detected. Make sure you are on campus.';
             return;
         }
 
-        statusDiv.textContent = `🔍 Calculating position using ${algorithm.toUpperCase()}...`;
-        
-        const enableKalman = document.getElementById('enableKalman').checked;
+        statusDiv.textContent = 'Calculating position...';
         
         const locateResponse = await fetch('/api/locate', {
             method: 'POST',
@@ -139,7 +205,7 @@ async function scanAndLocate() {
                 scan: scanData.aps,
                 algorithm: algorithm,
                 session_id: sessionId,
-                use_kalman: enableKalman && !algorithm.includes('kalman') // Don't double-apply Kalman
+                use_kalman: false // No Kalman for instant location
             })
         });
 
@@ -159,7 +225,7 @@ async function scanAndLocate() {
         drawFloorPlan();
 
         statusDiv.className = 'status success';
-        statusDiv.textContent = `✅ Position located! Floor ${position.floor}, Section: ${position.section}`;
+        statusDiv.textContent = `Position located! Floor ${position.floor}, Section: ${position.section}`;
         
         // Add to position history for trail visualization
         if (isTracking && position) {
@@ -186,25 +252,25 @@ async function scanAndLocate() {
         document.getElementById('nearestNeighbors').innerHTML = '<p class="placeholder">Scan to see nearest reference points</p>';
     } finally {
         scanBtn.disabled = false;
-        scanBtn.textContent = '🔍 Scan & Locate';
+        scanBtn.textContent = 'Get Current Location';
     }
 }
 
 function toggleAutoTracking() {
-    const btn = document.getElementById('autoTrackBtn');
-    const scanBtn = document.getElementById('scanBtn');
+    const btn = document.getElementById('startTrackingBtn');
+    const scanBtn = document.getElementById('getCurrentLocationBtn');
     const statusDiv = document.getElementById('scanStatus');
     
     if (!isTracking) {
         // Start tracking
         isTracking = true;
-        btn.textContent = '⏹️ Stop Tracking';
+        btn.textContent = 'Stop Tracking';
         btn.classList.remove('btn-accent');
         btn.classList.add('btn-danger');
         scanBtn.disabled = true;
         
         statusDiv.className = 'status info';
-        statusDiv.textContent = '🎯 Real-time tracking active - Auto-scanning every 2.5 seconds...';
+        statusDiv.textContent = 'Real-time tracking active - Auto-scanning every 2.5 seconds...';
         statusDiv.classList.remove('hidden');
         
         // Clear history and perform first scan immediately
@@ -226,22 +292,22 @@ function stopTracking() {
         trackingInterval = null;
     }
     
-    const btn = document.getElementById('autoTrackBtn');
-    const scanBtn = document.getElementById('scanBtn');
+    const btn = document.getElementById('startTrackingBtn');
+    const scanBtn = document.getElementById('getCurrentLocationBtn');
     const statusDiv = document.getElementById('scanStatus');
     
-    btn.textContent = '🎯 Start Real-Time Tracking';
+    btn.textContent = 'Start Real-Time Tracking';
     btn.classList.remove('btn-danger');
     btn.classList.add('btn-accent');
     scanBtn.disabled = false;
     
     statusDiv.className = 'status info';
-    statusDiv.textContent = '⏸️ Real-time tracking stopped';
+    statusDiv.textContent = 'Real-time tracking stopped';
 }
 
 async function performAutoScan() {
     const statusDiv = document.getElementById('scanStatus');
-    const algorithm = document.getElementById('algorithm').value;
+    const algorithm = 'ensemble-kalman'; // Always use ensemble-kalman for tracking
     
     try {
         const scanResponse = await fetch('/api/scan');
@@ -251,16 +317,12 @@ async function performAutoScan() {
             console.error('Scan error:', scanData.error);
             return;
         }
-        
-        displayNetworks(scanData.aps);
 
         if (scanData.count === 0) {
             statusDiv.className = 'status error';
-            statusDiv.textContent = '❌ No BMSIT networks detected. Retrying...';
+            statusDiv.textContent = 'No BMSIT networks detected. Retrying...';
             return;
         }
-
-        const enableKalman = document.getElementById('enableKalman').checked;
         
         const locateResponse = await fetch('/api/locate', {
             method: 'POST',
@@ -269,7 +331,7 @@ async function performAutoScan() {
                 scan: scanData.aps,
                 algorithm: algorithm,
                 session_id: sessionId,
-                use_kalman: enableKalman && !algorithm.includes('kalman')
+                use_kalman: false // ensemble-kalman already has Kalman built-in
             })
         });
 
@@ -305,11 +367,11 @@ async function performAutoScan() {
 
         statusDiv.className = 'status success';
         const scanCount = positionHistory.length;
-        statusDiv.textContent = `✅ Tracking active (${scanCount} scans) - Floor ${position.floor}, Section: ${position.section}`;
+        statusDiv.textContent = `Tracking active (${scanCount} scans) - Floor ${position.floor}, Section: ${position.section}`;
     } catch (error) {
         console.error('Auto-scan error:', error);
         statusDiv.className = 'status error';
-        statusDiv.textContent = `⚠️ Scan error: ${error.message}. Retrying...`;
+        statusDiv.textContent = `Scan error: ${error.message}. Retrying...`;
     }
 }
 
@@ -319,18 +381,22 @@ function displayNetworks(aps) {
         networkList.innerHTML = '<p class="placeholder">No networks detected</p>';
         return;
     }
-    const sorted = Object.entries(aps).sort((a, b) => b[1] - a[1]);
+    const sorted = Object.entries(aps).sort((a, b) => b[1] - a[1]).slice(0, 15); // Show top 15
     let html = '';
     sorted.forEach(([bssid, rssi]) => {
         const [mac, ssid] = bssid.split('|');
         let rssiClass = 'rssi-poor';
-        if (rssi > -60) rssiClass = 'rssi-excellent';
-        else if (rssi > -70) rssiClass = 'rssi-good';
-        else if (rssi > -80) rssiClass = 'rssi-fair';
+        if (rssi > -60) {
+            rssiClass = 'rssi-excellent';
+        } else if (rssi > -70) {
+            rssiClass = 'rssi-good';
+        } else if (rssi > -80) {
+            rssiClass = 'rssi-fair';
+        }
         html += `
             <div class="network-item">
                 <div class="network-name">${ssid}</div>
-                <div class="network-rssi ${rssiClass}">${rssi} dBm</div>
+                <div class="network-rssi ${rssiClass}" title="${rssi} dBm">${rssi} dBm</div>
             </div>
         `;
     });
@@ -351,19 +417,25 @@ function displayPosition(position) {
     
     const confidence = position.confidence.toFixed(1);
     const confidenceElem = document.getElementById('confidenceValue');
-    confidenceElem.textContent = `${confidence}%`;
+    
+    // Enhanced confidence display with color coding
+    if (confidence >= 95) {
+        confidenceElem.style.color = '#4CAF50';
+    } else if (confidence >= 85) {
+        confidenceElem.style.color = '#8BC34A';
+    } else if (confidence >= 75) {
+        confidenceElem.style.color = '#FFC107';
+    } else if (confidence >= 60) {
+        confidenceElem.style.color = '#FF9800';
+    } else {
+        confidenceElem.style.color = '#f44336';
+    }
+    
+    confidenceElem.innerHTML = `<strong>${confidence}%</strong>`;
 
     if (typeof position.floor_confidence !== "undefined" && typeof position.section_confidence !== "undefined") {
         let info = `Floor conf: ${position.floor_confidence.toFixed(1)}%, Section conf: ${position.section_confidence.toFixed(1)}%`;
         confidenceElem.title = info;
-    }
-
-    if (confidence >= 90) {
-        confidenceElem.style.color = '#4CAF50';
-    } else if (confidence >= 70) {
-        confidenceElem.style.color = '#FF9800';
-    } else {
-        confidenceElem.style.color = '#f44336';
     }
     
     // Display algorithm and Kalman status
@@ -436,8 +508,8 @@ function drawFloorPlan() {
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Draw white background
-    ctx.fillStyle = '#ffffff';
+    // Draw dark background
+    ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Draw floor layout
@@ -475,74 +547,104 @@ function gridToCanvas(gridX, gridY) {
 function drawFloorLayout() {
     ctx.save();
     
-    // Draw Left Section - 3x4 grid (no inner borders)
+    // Draw Left Section - 3x4 grid with gradient
+    const leftGradient = ctx.createLinearGradient(
+        LEFT_PADDING, canvas.height - 4 * SCALE,
+        LEFT_PADDING + 3 * SCALE, canvas.height
+    );
+    leftGradient.addColorStop(0, 'rgba(6, 182, 212, 0.15)');
+    leftGradient.addColorStop(1, 'rgba(14, 116, 144, 0.15)');
+    
     for (let gridX = 0; gridX < 3; gridX++) {
         for (let gridY = 0; gridY < 4; gridY++) {
             const x = LEFT_PADDING + gridX * SCALE;
-            const y = canvas.height - (gridY + 1) * SCALE; // Flip Y
+            const y = canvas.height - (gridY + 1) * SCALE;
             
-            ctx.fillStyle = 'rgba(232, 245, 233, 0.15)';
+            ctx.fillStyle = leftGradient;
             ctx.fillRect(x, y, SCALE, SCALE);
         }
     }
     
-    // Draw outer border for left section
-    ctx.strokeStyle = '#4CAF50';
-    ctx.lineWidth = 3;
+    // Draw outer border for left section with glow
+    ctx.shadowColor = 'rgba(6, 182, 212, 0.5)';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#06b6d4';
+    ctx.lineWidth = 4;
     ctx.strokeRect(LEFT_PADDING, canvas.height - 4 * SCALE, 3 * SCALE, 4 * SCALE);
+    ctx.shadowBlur = 0;
     
-    // Left label
-    ctx.fillStyle = '#2E7D32';
-    ctx.globalAlpha = 0.25;
-    ctx.font = 'bold 28px Arial';
+    // Left label with better styling
+    ctx.fillStyle = '#06b6d4';
+    ctx.globalAlpha = 0.4;
+    ctx.font = 'bold 32px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('LEFT SECTION', LEFT_PADDING + 1.5 * SCALE, canvas.height - 2 * SCALE);
+    ctx.fillText('LEFT', LEFT_PADDING + 1.5 * SCALE, canvas.height - 2 * SCALE);
     ctx.globalAlpha = 1.0;
     
-    // Draw Corridor - spans from y=2 to y=3 (canvas units 2.5 to 3.5)
+    // Draw Corridor with gradient
+    const corridorGradient = ctx.createLinearGradient(
+        LEFT_PADDING + 3 * SCALE, 0,
+        LEFT_PADDING + 20 * SCALE, 0
+    );
+    corridorGradient.addColorStop(0, 'rgba(16, 185, 129, 0.15)');
+    corridorGradient.addColorStop(0.5, 'rgba(5, 150, 105, 0.2)');
+    corridorGradient.addColorStop(1, 'rgba(16, 185, 129, 0.15)');
+    
     for (let gridX = 3; gridX < 20; gridX++) {
         const x = LEFT_PADDING + gridX * SCALE;
-        // In canvas coordinates: top at y=3.5, bottom at y=2.5
-        const y = canvas.height - 3.5 * SCALE; // Top edge
-        const height = SCALE; // Height of 1 grid unit (from 2.5 to 3.5)
+        const y = canvas.height - 3.5 * SCALE;
+        const height = SCALE;
         
-        ctx.fillStyle = 'rgba(243, 229, 245, 0.15)';
+        ctx.fillStyle = corridorGradient;
         ctx.fillRect(x, y, SCALE, height);
     }
     
-    // Draw outer border for corridor
-    ctx.strokeStyle = '#9C27B0';
-    ctx.lineWidth = 3;
+    // Draw outer border for corridor with glow
+    ctx.shadowColor = 'rgba(16, 185, 129, 0.5)';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 4;
     ctx.strokeRect(LEFT_PADDING + 3 * SCALE, canvas.height - 3.5 * SCALE, 17 * SCALE, SCALE);
+    ctx.shadowBlur = 0;
     
     // Corridor label
-    ctx.fillStyle = '#6A1B9A';
-    ctx.globalAlpha = 0.3;
-    ctx.font = 'bold 32px Arial';
+    ctx.fillStyle = '#10b981';
+    ctx.globalAlpha = 0.45;
+    ctx.font = 'bold 36px Inter, sans-serif';
     ctx.fillText('CORRIDOR', LEFT_PADDING + 11.5 * SCALE, canvas.height - 2.35 * SCALE);
     ctx.globalAlpha = 1.0;
     
-    // Draw Right Section - 3x4 grid (no inner borders)
+    // Draw Right Section - 3x4 grid with gradient
+    const rightGradient = ctx.createLinearGradient(
+        LEFT_PADDING + 20 * SCALE, canvas.height - 4 * SCALE,
+        LEFT_PADDING + 23 * SCALE, canvas.height
+    );
+    rightGradient.addColorStop(0, 'rgba(8, 145, 178, 0.15)');
+    rightGradient.addColorStop(1, 'rgba(14, 116, 144, 0.15)');
+    
     for (let gridX = 20; gridX < 23; gridX++) {
         for (let gridY = 0; gridY < 4; gridY++) {
             const x = LEFT_PADDING + gridX * SCALE;
-            const y = canvas.height - (gridY + 1) * SCALE; // Flip Y
+            const y = canvas.height - (gridY + 1) * SCALE;
             
-            ctx.fillStyle = 'rgba(227, 242, 253, 0.15)';
+            ctx.fillStyle = rightGradient;
             ctx.fillRect(x, y, SCALE, SCALE);
         }
     }
     
-    // Draw outer border for right section
-    ctx.strokeStyle = '#2196F3';
-    ctx.lineWidth = 3;
+    // Draw outer border for right section with glow
+    ctx.shadowColor = 'rgba(8, 145, 178, 0.5)';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = '#0891b2';
+    ctx.lineWidth = 4;
     ctx.strokeRect(LEFT_PADDING + 20 * SCALE, canvas.height - 4 * SCALE, 3 * SCALE, 4 * SCALE);
+    ctx.shadowBlur = 0;
     
     // Right label
-    ctx.fillStyle = '#1565C0';
-    ctx.globalAlpha = 0.25;
-    ctx.font = 'bold 28px Arial';
-    ctx.fillText('RIGHT SECTION', LEFT_PADDING + 21.5 * SCALE, canvas.height - 2 * SCALE);
+    ctx.fillStyle = '#0891b2';
+    ctx.globalAlpha = 0.4;
+    ctx.font = 'bold 32px Inter, sans-serif';
+    ctx.fillText('RIGHT', LEFT_PADDING + 21.5 * SCALE, canvas.height - 2 * SCALE);
     ctx.globalAlpha = 1.0;
     
     ctx.restore();
@@ -553,15 +655,23 @@ function drawNavigationPath() {
     if (pathPoints.length < 2) return;
     
     ctx.save();
-    ctx.shadowColor = 'rgba(255, 0, 102, 0.3)';
-    ctx.shadowBlur = 10;
+    ctx.shadowColor = 'rgba(236, 72, 153, 0.6)';
+    ctx.shadowBlur = 20;
     
-    // Draw path line
-    ctx.strokeStyle = '#FF0066';
-    ctx.lineWidth = 8;
+    // Draw path line with gradient
+    const gradient = ctx.createLinearGradient(
+        LEFT_PADDING, canvas.height / 2,
+        LEFT_PADDING + 23 * SCALE, canvas.height / 2
+    );
+    gradient.addColorStop(0, '#ec4899');
+    gradient.addColorStop(0.5, '#f472b6');
+    gradient.addColorStop(1, '#ec4899');
+    
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = 10;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.setLineDash([15, 10]);
+    ctx.setLineDash([20, 12]);
     
     ctx.beginPath();
     pathPoints.forEach((pt, i) => {
@@ -575,23 +685,29 @@ function drawNavigationPath() {
     ctx.stroke();
     ctx.setLineDash([]);
     
-    // Draw waypoint circles
+    // Draw waypoint circles with better styling
     pathPoints.forEach((pt, i) => {
         const pos = gridToCanvas(pt.x, pt.y);
         
-        ctx.fillStyle = '#FF0066';
+        // Outer glow
+        ctx.shadowColor = 'rgba(236, 72, 153, 0.8)';
+        ctx.shadowBlur = 15;
+        
+        ctx.fillStyle = '#ec4899';
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
+        ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
         ctx.fill();
         
         ctx.strokeStyle = '#FFF';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
         ctx.stroke();
+        
+        ctx.shadowBlur = 0;
         
         // Add step numbers
         if (i > 0 && i < pathPoints.length - 1) {
             ctx.fillStyle = '#FFF';
-            ctx.font = 'bold 16px Arial';
+            ctx.font = 'bold 16px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(i.toString(), pos.x, pos.y);
@@ -837,10 +953,12 @@ function drawReferencePoints(points) {
     points.forEach(point => {
         const pos = gridToCanvas(point.x, point.y);
         
-        ctx.fillStyle = '#2196F3';
-        ctx.strokeStyle = '#FFF';
+        ctx.shadowColor = 'rgba(6, 182, 212, 0.4)';
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = '#06b6d4';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
         ctx.lineWidth = 2;
-        ctx.globalAlpha = 0.7;
+        ctx.globalAlpha = 0.8;
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
         ctx.fill();
@@ -849,8 +967,9 @@ function drawReferencePoints(points) {
         // Show coordinates for integer points
         if (point.x % 1 === 0 && point.y % 1 === 0) {
             ctx.globalAlpha = 1;
-            ctx.fillStyle = '#666';
-            ctx.font = 'bold 14px Arial';
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#cbd5e1';
+            ctx.font = 'bold 13px Inter, sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'bottom';
             ctx.fillText(`(${point.x},${point.y})`, pos.x + 12, pos.y - 12);
@@ -869,10 +988,10 @@ function drawNearestNeighbors(neighbors) {
         // Draw connecting line
         if (currentPosition) {
             const currentPos = gridToCanvas(currentPosition.x, currentPosition.y);
-            ctx.strokeStyle = '#FF9800';
+            ctx.strokeStyle = '#10b981';
             ctx.lineWidth = 3;
-            ctx.globalAlpha = 0.3;
-            ctx.setLineDash([8, 8]);
+            ctx.globalAlpha = 0.35;
+            ctx.setLineDash([10, 8]);
             ctx.beginPath();
             ctx.moveTo(pos.x, pos.y);
             ctx.lineTo(currentPos.x, currentPos.y);
@@ -881,21 +1000,21 @@ function drawNearestNeighbors(neighbors) {
             ctx.globalAlpha = 1;
         }
         
-        // Draw neighbor circle
-        ctx.shadowColor = 'rgba(255, 152, 0, 0.5)';
-        ctx.shadowBlur = 8;
-        ctx.fillStyle = '#FF9800';
+        // Draw neighbor circle with glow
+        ctx.shadowColor = 'rgba(16, 185, 129, 0.6)';
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = '#10b981';
         ctx.strokeStyle = '#FFF';
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 15, 0, 2 * Math.PI);
+        ctx.arc(pos.x, pos.y, 16, 0, 2 * Math.PI);
         ctx.fill();
         ctx.stroke();
         
         // Rank number
         ctx.shadowColor = 'transparent';
         ctx.fillStyle = '#FFF';
-        ctx.font = 'bold 16px Arial';
+        ctx.font = 'bold 16px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText((index + 1).toString(), pos.x, pos.y);
@@ -912,12 +1031,14 @@ function drawPositionTrail() {
     
     ctx.save();
     
-    // Draw trail line
-    ctx.strokeStyle = '#FF9800';
-    ctx.lineWidth = 3;
+    // Draw trail line with gradient
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.globalAlpha = 0.6;
+    ctx.shadowColor = 'rgba(16, 185, 129, 0.4)';
+    ctx.shadowBlur = 8;
     
     ctx.beginPath();
     floorHistory.forEach((pos, index) => {
@@ -929,6 +1050,8 @@ function drawPositionTrail() {
         }
     });
     ctx.stroke();
+    
+    ctx.shadowBlur = 0;
     
     // Draw trail points (older = more transparent)
     floorHistory.forEach((pos, index) => {
@@ -964,57 +1087,63 @@ function drawCurrentPosition() {
     const pos = gridToCanvas(currentPosition.x, currentPosition.y);
     ctx.save();
     
-    // Pulsing outer circle (animated for tracking mode)
-    ctx.strokeStyle = isTracking ? '#FF9800' : '#4CAF50';
-    ctx.lineWidth = 4;
-    ctx.globalAlpha = 0.4;
+    // Pulsing outer circle with strong glow
+    ctx.shadowColor = isTracking ? 'rgba(16, 185, 129, 0.6)' : 'rgba(6, 182, 212, 0.6)';
+    ctx.shadowBlur = 20;
+    ctx.strokeStyle = isTracking ? '#10b981' : '#06b6d4';
+    ctx.lineWidth = 5;
+    ctx.globalAlpha = 0.5;
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, 35, 0, 2 * Math.PI);
+    ctx.arc(pos.x, pos.y, 38, 0, 2 * Math.PI);
     ctx.stroke();
     
     // Static outer ring
     ctx.globalAlpha = 1;
+    ctx.shadowBlur = 15;
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, 28, 0, 2 * Math.PI);
+    ctx.arc(pos.x, pos.y, 30, 0, 2 * Math.PI);
     ctx.stroke();
     
-    // Main position circle
-    ctx.shadowColor = isTracking ? 'rgba(255, 152, 0, 0.5)' : 'rgba(76, 175, 80, 0.5)';
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = isTracking ? '#FF9800' : '#4CAF50';
+    // Main position circle with strong glow
+    ctx.shadowColor = isTracking ? 'rgba(16, 185, 129, 0.8)' : 'rgba(6, 182, 212, 0.8)';
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = isTracking ? '#10b981' : '#06b6d4';
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, 20, 0, 2 * Math.PI);
+    ctx.arc(pos.x, pos.y, 22, 0, 2 * Math.PI);
     ctx.fill();
     
     // Center dot
     ctx.shadowColor = 'transparent';
     ctx.fillStyle = '#FFF';
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, 6, 0, 2 * Math.PI);
+    ctx.arc(pos.x, pos.y, 7, 0, 2 * Math.PI);
     ctx.fill();
     
-    // Label background
-    ctx.shadowColor = isTracking ? 'rgba(255, 152, 0, 0.5)' : 'rgba(76, 175, 80, 0.5)';
-    ctx.shadowBlur = 8;
-    ctx.fillStyle = isTracking ? '#FF9800' : '#4CAF50';
+    // Label background with rounded corners and glow
+    ctx.shadowColor = isTracking ? 'rgba(16, 185, 129, 0.6)' : 'rgba(6, 182, 212, 0.6)';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = isTracking ? '#10b981' : '#06b6d4';
     ctx.beginPath();
-    const labelText = isTracking ? 'TRACKING...' : 'YOU ARE HERE';
-    const labelWidth = isTracking ? 130 : 160;
-    ctx.roundRect(pos.x - labelWidth/2, pos.y - 70, labelWidth, 35, 8);
+    const labelText = isTracking ? 'TRACKING' : 'YOU ARE HERE';
+    const labelWidth = isTracking ? 140 : 170;
+    ctx.roundRect(pos.x - labelWidth/2, pos.y - 75, labelWidth, 38, 10);
     ctx.fill();
     
     // Label text
-    ctx.shadowColor = 'transparent';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+    ctx.shadowBlur = 2;
     ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 20px Arial';
+    ctx.font = 'bold 20px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(labelText, pos.x, pos.y - 52);
+    ctx.fillText(labelText, pos.x, pos.y - 56);
     
-    // Coordinates
-    ctx.fillStyle = '#333';
-    ctx.font = 'bold 16px Arial';
-    ctx.fillText(`(${currentPosition.x.toFixed(2)}, ${currentPosition.y.toFixed(2)})`, pos.x, pos.y + 60);
+    // Coordinates with better visibility
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+    ctx.shadowBlur = 4;
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 16px Inter, sans-serif';
+    ctx.fillText(`(${currentPosition.x.toFixed(2)}, ${currentPosition.y.toFixed(2)})`, pos.x, pos.y + 65);
     
     ctx.restore();
 }
