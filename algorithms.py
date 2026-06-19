@@ -266,3 +266,332 @@ class HybridWKNNRF(PositioningAlgorithm):
             'section_confidence': float(section_conf)
         }
         return result
+
+
+class XGBoostPositioning(PositioningAlgorithm):
+    """XGBoost-based positioning with gradient boosting"""
+    def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str]):
+        super().__init__(reference_points, all_bssids)
+        self.model_x = None
+        self.model_y = None
+        self.model_floor = None
+        self.model_section = None
+        self.train()
+
+    def train(self):
+        try:
+            import xgboost as xgb
+        except ImportError:
+            raise ImportError("XGBoost not installed. Run: pip install xgboost")
+        
+        X = []
+        y_x = []
+        y_y = []
+        y_floor = []
+        y_section = []
+        
+        for idx, ref_point in self.reference_points.iterrows():
+            rssi_vector = self.get_reference_rssi_vector(ref_point)
+            X.append(rssi_vector)
+            y_x.append(ref_point['x'])
+            y_y.append(ref_point['y'])
+            y_floor.append(ref_point['floor'])
+            y_section.append(ref_point['section'])
+        
+        X = np.array(X)
+        y_x = np.array(y_x)
+        y_y = np.array(y_y)
+        y_floor = np.array(y_floor)
+        
+        # Encode sections as integers
+        from sklearn.preprocessing import LabelEncoder
+        self.section_encoder = LabelEncoder()
+        y_section_encoded = self.section_encoder.fit_transform(y_section)
+        
+        # Train XGBoost models
+        self.model_x = xgb.XGBRegressor(
+            n_estimators=200,
+            max_depth=8,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        self.model_y = xgb.XGBRegressor(
+            n_estimators=200,
+            max_depth=8,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        self.model_floor = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        self.model_section = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        
+        self.model_x.fit(X, y_x)
+        self.model_y.fit(X, y_y)
+        self.model_floor.fit(X, y_floor)
+        self.model_section.fit(X, y_section_encoded)
+
+    def estimate_position(self, current_scan: Dict[str, int]) -> Dict:
+        current_vector = self.prepare_rssi_vector(current_scan).reshape(1, -1)
+        
+        x = float(self.model_x.predict(current_vector)[0])
+        y = float(self.model_y.predict(current_vector)[0])
+        floor = int(self.model_floor.predict(current_vector)[0])
+        section_encoded = self.model_section.predict(current_vector)[0]
+        section = str(self.section_encoder.inverse_transform([section_encoded])[0])
+        
+        floor_proba = self.model_floor.predict_proba(current_vector)[0]
+        section_proba = self.model_section.predict_proba(current_vector)[0]
+        confidence = (max(floor_proba) + max(section_proba)) / 2 * 100
+        
+        result = {
+            'x': float(x),
+            'y': float(y),
+            'floor': int(floor),
+            'section': str(section),
+            'algorithm': 'XGBoost',
+            'confidence': float(confidence),
+            'floor_confidence': float(max(floor_proba) * 100),
+            'section_confidence': float(max(section_proba) * 100)
+        }
+        return result
+
+
+class DeepNeuralNetwork(PositioningAlgorithm):
+    """Deep Neural Network for indoor positioning"""
+    def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str]):
+        super().__init__(reference_points, all_bssids)
+        self.model_coords = None
+        self.model_floor = None
+        self.model_section = None
+        self.scaler = None
+        self.train()
+
+    def train(self):
+        try:
+            from sklearn.neural_network import MLPRegressor, MLPClassifier
+            from sklearn.preprocessing import StandardScaler, LabelEncoder
+        except ImportError:
+            raise ImportError("scikit-learn not installed properly")
+        
+        X = []
+        y_x = []
+        y_y = []
+        y_floor = []
+        y_section = []
+        
+        for idx, ref_point in self.reference_points.iterrows():
+            rssi_vector = self.get_reference_rssi_vector(ref_point)
+            X.append(rssi_vector)
+            y_x.append(ref_point['x'])
+            y_y.append(ref_point['y'])
+            y_floor.append(ref_point['floor'])
+            y_section.append(ref_point['section'])
+        
+        X = np.array(X)
+        
+        # Normalize RSSI values
+        self.scaler = StandardScaler()
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Encode sections
+        self.section_encoder = LabelEncoder()
+        y_section_encoded = self.section_encoder.fit_transform(y_section)
+        
+        # Combine x and y for joint prediction
+        y_coords = np.column_stack([y_x, y_y])
+        
+        # Deep Neural Network for coordinates
+        self.model_coords = MLPRegressor(
+            hidden_layer_sizes=(256, 128, 64, 32),
+            activation='relu',
+            solver='adam',
+            alpha=0.001,
+            batch_size=32,
+            learning_rate='adaptive',
+            learning_rate_init=0.001,
+            max_iter=500,
+            early_stopping=True,
+            validation_fraction=0.1,
+            random_state=42
+        )
+        
+        # Deep Neural Network for floor
+        self.model_floor = MLPClassifier(
+            hidden_layer_sizes=(128, 64, 32),
+            activation='relu',
+            solver='adam',
+            alpha=0.001,
+            batch_size=32,
+            learning_rate='adaptive',
+            learning_rate_init=0.001,
+            max_iter=300,
+            early_stopping=True,
+            validation_fraction=0.1,
+            random_state=42
+        )
+        
+        # Deep Neural Network for section
+        self.model_section = MLPClassifier(
+            hidden_layer_sizes=(128, 64, 32),
+            activation='relu',
+            solver='adam',
+            alpha=0.001,
+            batch_size=32,
+            learning_rate='adaptive',
+            learning_rate_init=0.001,
+            max_iter=300,
+            early_stopping=True,
+            validation_fraction=0.1,
+            random_state=42
+        )
+        
+        self.model_coords.fit(X_scaled, y_coords)
+        self.model_floor.fit(X_scaled, y_floor)
+        self.model_section.fit(X_scaled, y_section_encoded)
+
+    def estimate_position(self, current_scan: Dict[str, int]) -> Dict:
+        current_vector = self.prepare_rssi_vector(current_scan).reshape(1, -1)
+        current_vector_scaled = self.scaler.transform(current_vector)
+        
+        coords = self.model_coords.predict(current_vector_scaled)[0]
+        x = float(coords[0])
+        y = float(coords[1])
+        
+        floor = int(self.model_floor.predict(current_vector_scaled)[0])
+        section_encoded = self.model_section.predict(current_vector_scaled)[0]
+        section = str(self.section_encoder.inverse_transform([section_encoded])[0])
+        
+        floor_proba = self.model_floor.predict_proba(current_vector_scaled)[0]
+        section_proba = self.model_section.predict_proba(current_vector_scaled)[0]
+        confidence = (max(floor_proba) + max(section_proba)) / 2 * 100
+        
+        result = {
+            'x': float(x),
+            'y': float(y),
+            'floor': int(floor),
+            'section': str(section),
+            'algorithm': 'Deep-Neural-Network',
+            'confidence': float(confidence),
+            'floor_confidence': float(max(floor_proba) * 100),
+            'section_confidence': float(max(section_proba) * 100)
+        }
+        return result
+
+
+class KalmanFilter:
+    """Kalman Filter for smoothing position estimates"""
+    def __init__(self, process_variance=0.01, measurement_variance=0.5):
+        self.process_variance = process_variance
+        self.measurement_variance = measurement_variance
+        self.reset()
+    
+    def reset(self):
+        self.x_estimate = None
+        self.y_estimate = None
+        self.x_error = 1.0
+        self.y_error = 1.0
+    
+    def update(self, x_measured, y_measured):
+        if self.x_estimate is None:
+            # First measurement
+            self.x_estimate = x_measured
+            self.y_estimate = y_measured
+            return self.x_estimate, self.y_estimate
+        
+        # Predict
+        x_predict = self.x_estimate
+        y_predict = self.y_estimate
+        x_error_predict = self.x_error + self.process_variance
+        y_error_predict = self.y_error + self.process_variance
+        
+        # Update
+        x_kalman_gain = x_error_predict / (x_error_predict + self.measurement_variance)
+        y_kalman_gain = y_error_predict / (y_error_predict + self.measurement_variance)
+        
+        self.x_estimate = x_predict + x_kalman_gain * (x_measured - x_predict)
+        self.y_estimate = y_predict + y_kalman_gain * (y_measured - y_predict)
+        
+        self.x_error = (1 - x_kalman_gain) * x_error_predict
+        self.y_error = (1 - y_kalman_gain) * y_error_predict
+        
+        return self.x_estimate, self.y_estimate
+
+
+class SmartEnsemble(PositioningAlgorithm):
+    """Intelligent ensemble that weights algorithms by confidence and performance"""
+    def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str], algorithms: List):
+        super().__init__(reference_points, all_bssids)
+        self.algorithms = algorithms
+        self.kalman_filter = KalmanFilter()
+    
+    def estimate_position(self, current_scan: Dict[str, int], use_kalman=True) -> Dict:
+        # Get predictions from all algorithms
+        predictions = []
+        for algo in self.algorithms:
+            try:
+                result = algo.estimate_position(current_scan)
+                predictions.append(result)
+            except Exception as e:
+                continue
+        
+        if not predictions:
+            raise ValueError("No algorithm produced a valid prediction")
+        
+        # Weight by confidence
+        total_confidence = sum(p['confidence'] for p in predictions)
+        weights = [p['confidence'] / total_confidence for p in predictions]
+        
+        # Weighted average for coordinates
+        x_weighted = sum(p['x'] * w for p, w in zip(predictions, weights))
+        y_weighted = sum(p['y'] * w for p, w in zip(predictions, weights))
+        
+        # Apply Kalman filtering
+        if use_kalman:
+            x_filtered, y_filtered = self.kalman_filter.update(x_weighted, y_weighted)
+        else:
+            x_filtered, y_filtered = x_weighted, y_weighted
+        
+        # Voting for floor and section (weighted)
+        floor_votes = {}
+        section_votes = {}
+        
+        for pred, weight in zip(predictions, weights):
+            floor = pred['floor']
+            section = pred['section']
+            floor_votes[floor] = floor_votes.get(floor, 0) + weight
+            section_votes[section] = section_votes.get(section, 0) + weight
+        
+        best_floor = max(floor_votes, key=floor_votes.get)
+        best_section = max(section_votes, key=section_votes.get)
+        
+        # Average confidence
+        avg_confidence = sum(p['confidence'] for p in predictions) / len(predictions)
+        
+        result = {
+            'x': float(x_filtered),
+            'y': float(y_filtered),
+            'floor': int(best_floor),
+            'section': str(best_section),
+            'algorithm': 'Smart-Ensemble',
+            'confidence': float(avg_confidence),
+            'num_algorithms': len(predictions),
+            'individual_predictions': predictions
+        }
+        return result

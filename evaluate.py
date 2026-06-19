@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from preprocessing import FingerprintDatabase
-from algorithms import KNN, WeightedKNN, RandomForestPositioning
+from algorithms import KNN, WeightedKNN, RandomForestPositioning, HybridWKNNRF, XGBoostPositioning, DeepNeuralNetwork, SmartEnsemble
 import random
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -128,6 +128,16 @@ def main():
     rf = RandomForestPositioning(db.reference_points, db.all_bssids)
     rf.train()
     print("│  ✓ Random Forest (trained)")
+    hybrid = HybridWKNNRF(db.reference_points, db.all_bssids, k=4)
+    print("│  ✓ Hybrid WKNN+RF (trained)")
+    
+    print("│  ⚙️  Training advanced algorithms...")
+    xgb = XGBoostPositioning(db.reference_points, db.all_bssids)
+    print("│  ✓ XGBoost (trained)")
+    dnn = DeepNeuralNetwork(db.reference_points, db.all_bssids)
+    print("│  ✓ Deep Neural Network (trained)")
+    ensemble = SmartEnsemble(db.reference_points, db.all_bssids, [wknn, rf, xgb, dnn])
+    print("│  ✓ Smart Ensemble with Kalman Filter")
     print("└─ All algorithms ready!")
     
     # Evaluate each algorithm
@@ -137,16 +147,32 @@ def main():
     print("│" + " "*15 + "🧪 RUNNING ALGORITHM TESTS" + " "*27 + "│")
     print("└" + "─"*68 + "┘")
     
-    print("\n[1/3] Testing K-Nearest Neighbors...")
+    print("\n[1/7] Testing K-Nearest Neighbors...")
     results['KNN'], knn_errors = evaluate_algorithm(knn, test_samples, db, 'KNN')
     print("      ✓ Complete!")
     
-    print("\n[2/3] Testing Weighted K-Nearest Neighbors...")
+    print("\n[2/7] Testing Weighted K-Nearest Neighbors...")
     results['WKNN'], wknn_errors = evaluate_algorithm(wknn, test_samples, db, 'WKNN')
     print("      ✓ Complete!")
     
-    print("\n[3/3] Testing Random Forest...")
+    print("\n[3/7] Testing Random Forest...")
     results['RF'], rf_errors = evaluate_algorithm(rf, test_samples, db, 'Random Forest')
+    print("      ✓ Complete!")
+    
+    print("\n[4/7] Testing Hybrid WKNN+RF...")
+    results['Hybrid'], hybrid_errors = evaluate_algorithm(hybrid, test_samples, db, 'Hybrid')
+    print("      ✓ Complete!")
+    
+    print("\n[5/7] Testing XGBoost...")
+    results['XGBoost'], xgb_errors = evaluate_algorithm(xgb, test_samples, db, 'XGBoost')
+    print("      ✓ Complete!")
+    
+    print("\n[6/7] Testing Deep Neural Network...")
+    results['DNN'], dnn_errors = evaluate_algorithm(dnn, test_samples, db, 'DNN')
+    print("      ✓ Complete!")
+    
+    print("\n[7/7] Testing Smart Ensemble...")
+    results['Ensemble'], ensemble_errors = evaluate_algorithm(ensemble, test_samples, db, 'Ensemble')
     print("      ✓ Complete!")
     
     # Display results
@@ -159,7 +185,7 @@ def main():
     print("│")
     print(f"│  {'Algorithm':<20} {'Floor Accuracy':>15} {'Section Accuracy':>15}")
     print(f"│  {'-'*20} {'-'*15} {'-'*15}")
-    for algo_name in ['KNN', 'WKNN', 'RF']:
+    for algo_name in ['KNN', 'WKNN', 'RF', 'Hybrid', 'XGBoost', 'DNN', 'Ensemble']:
         floor_acc = results[algo_name]['floor_accuracy']
         section_acc = results[algo_name]['section_accuracy']
         
@@ -175,7 +201,7 @@ def main():
     print("│")
     print(f"│  {'Algorithm':<12} {'Mean':>8} {'Median':>8} {'90th %ile':>10} {'95th %ile':>10}")
     print(f"│  {'-'*12} {'-'*8} {'-'*8} {'-'*10} {'-'*10}")
-    for algo_name in ['KNN', 'WKNN', 'RF']:
+    for algo_name in ['KNN', 'WKNN', 'RF', 'Hybrid', 'XGBoost', 'DNN', 'Ensemble']:
         mean_err = results[algo_name]['mean_error']
         median_err = results[algo_name]['median_error']
         p90 = results[algo_name]['percentile_90']
@@ -188,7 +214,7 @@ def main():
     print("│")
     print(f"│  {'Algorithm':<15} {'Avg Confidence':>15} {'Avg APs Detected':>18}")
     print(f"│  {'-'*15} {'-'*15} {'-'*18}")
-    for algo_name in ['KNN', 'WKNN', 'RF']:
+    for algo_name in ['KNN', 'WKNN', 'RF', 'Hybrid', 'XGBoost', 'DNN', 'Ensemble']:
         conf = results[algo_name]['mean_confidence']
         aps = results[algo_name]['mean_aps']
         conf_bar = "█" * int(conf / 10)
@@ -212,7 +238,7 @@ def main():
     print("\n┌─ 📈 ERROR DISTRIBUTION ANALYSIS")
     print("│")
     
-    for algo_name, errors_df in [('KNN', knn_errors), ('WKNN', wknn_errors), ('RF', rf_errors)]:
+    for algo_name, errors_df in [('KNN', knn_errors), ('WKNN', wknn_errors), ('RF', rf_errors), ('Hybrid', hybrid_errors), ('XGBoost', xgb_errors), ('DNN', dnn_errors), ('Ensemble', ensemble_errors)]:
         print(f"│  {algo_name} Algorithm:")
         
         ranges = [
@@ -254,7 +280,7 @@ def main():
     print("╠" + "═"*68 + "╣")
     print(f"║  Total Tests Conducted:    {results['WKNN']['num_tests']:<39}║")
     print(f"║  Dataset Coverage:         10% random sampling{' '*22}║")
-    print(f"║  Algorithms Evaluated:     3 (KNN, WKNN, Random Forest){' '*11}║")
+    print(f"║  Algorithms Evaluated:     7 (KNN, WKNN, RF, Hybrid, XGB, DNN, Ensemble){' '*0}║")
     print(f"║  Best Algorithm:           {best_algo[0]:<39}║")
     print(f"║  Best Mean Error:          {best_algo[1]['mean_error']:.2f} grid units{' '*29}║")
     print(f"║  Best Floor Accuracy:      {best_algo[1]['floor_accuracy']:.1f}%{' '*39}║")
@@ -278,7 +304,8 @@ def main():
     
     # 1. Algorithm Comparison - Accuracy Metrics (Top Left)
     ax1 = plt.subplot(2, 3, 1)
-    algorithms = ['KNN', 'WKNN', 'RF']
+    algorithms = ['KNN', 'WKNN', 'RF', 'Hybrid', 'XGBoost', 'DNN', 'Ensemble']
+    algo_labels = ['KNN', 'WKNN', 'RF', 'Hybrid', 'XGB', 'DNN', 'Ensemble']
     floor_acc = [results[algo]['floor_accuracy'] for algo in algorithms]
     section_acc = [results[algo]['section_accuracy'] for algo in algorithms]
     
@@ -290,11 +317,11 @@ def main():
                      color='#2196F3', alpha=0.8)
     
     ax1.set_ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
-    ax1.set_title('Algorithm Accuracy Comparison', fontsize=14, fontweight='bold')
+    ax1.set_title('Algorithm Accuracy Comparison (All 7)', fontsize=14, fontweight='bold')
     ax1.set_xticks(x)
-    ax1.set_xticklabels(algorithms)
+    ax1.set_xticklabels(algo_labels, rotation=45, ha='right', fontsize=9)
     ax1.legend(loc='lower right')
-    ax1.set_ylim([0, 100])
+    ax1.set_ylim([0, 105])
     ax1.grid(axis='y', alpha=0.3)
     
     # Add value labels on bars
@@ -302,7 +329,7 @@ def main():
         for bar in bars:
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.1f}%', ha='center', va='bottom', fontsize=9)
+                    f'{height:.0f}', ha='center', va='bottom', fontsize=7)
     
     # 2. Positioning Error Comparison (Top Middle)
     ax2 = plt.subplot(2, 3, 2)
@@ -316,49 +343,61 @@ def main():
                      color='#F44336', alpha=0.8)
     
     ax2.set_ylabel('Error (Grid Units)', fontsize=12, fontweight='bold')
-    ax2.set_title('Positioning Error Comparison', fontsize=14, fontweight='bold')
+    ax2.set_title('Positioning Error Comparison (All 7)', fontsize=14, fontweight='bold')
     ax2.set_xticks(x)
-    ax2.set_xticklabels(algorithms)
+    ax2.set_xticklabels(algo_labels, rotation=45, ha='right', fontsize=9)
     ax2.legend(loc='upper right')
     ax2.grid(axis='y', alpha=0.3)
     
     for bars in [bars1, bars2]:
         for bar in bars:
             height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.2f}', ha='center', va='bottom', fontsize=9)
+            if height < 15:  # Only show labels for reasonable values
+                ax2.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.2f}', ha='center', va='bottom', fontsize=7)
     
     # 3. Error Distribution (Top Right)
     ax3 = plt.subplot(2, 3, 3)
-    colors = ['#4CAF50', '#2196F3', '#9C27B0']
+    colors = ['#4CAF50', '#2196F3', '#9C27B0', '#FF9800', '#F44336', '#9E9E9E', '#00BCD4']
     
     for idx, (algo_name, errors_df) in enumerate([('KNN', knn_errors), 
                                                     ('WKNN', wknn_errors), 
-                                                    ('RF', rf_errors)]):
-        ax3.hist(errors_df['error_distance'], bins=30, alpha=0.6, 
-                label=algo_name, color=colors[idx], edgecolor='black')
+                                                    ('RF', rf_errors),
+                                                    ('Hybrid', hybrid_errors),
+                                                    ('XGB', xgb_errors),
+                                                    ('DNN', dnn_errors),
+                                                    ('Ens', ensemble_errors)]):
+        # Only show reasonable error ranges
+        filtered_errors = errors_df[errors_df['error_distance'] < 10]['error_distance']
+        ax3.hist(filtered_errors, bins=30, alpha=0.5, 
+                label=algo_name, color=colors[idx], edgecolor='black', linewidth=0.5)
     
     ax3.set_xlabel('Error Distance (Grid Units)', fontsize=12, fontweight='bold')
     ax3.set_ylabel('Frequency', fontsize=12, fontweight='bold')
-    ax3.set_title('Error Distribution', fontsize=14, fontweight='bold')
-    ax3.legend()
+    ax3.set_title('Error Distribution (All 7, <10 units)', fontsize=14, fontweight='bold')
+    ax3.legend(fontsize=8, ncol=2)
     ax3.grid(axis='y', alpha=0.3)
+    ax3.set_xlim([0, 10])
     
     # 4. Cumulative Error Distribution (Bottom Left)
     ax4 = plt.subplot(2, 3, 4)
     
     for idx, (algo_name, errors_df) in enumerate([('KNN', knn_errors), 
                                                     ('WKNN', wknn_errors), 
-                                                    ('RF', rf_errors)]):
+                                                    ('RF', rf_errors),
+                                                    ('Hybrid', hybrid_errors),
+                                                    ('XGB', xgb_errors),
+                                                    ('DNN', dnn_errors),
+                                                    ('Ens', ensemble_errors)]):
         sorted_errors = np.sort(errors_df['error_distance'])
         cumulative = np.arange(1, len(sorted_errors) + 1) / len(sorted_errors) * 100
         ax4.plot(sorted_errors, cumulative, label=algo_name, 
-                linewidth=2.5, color=colors[idx])
+                linewidth=2, color=colors[idx], alpha=0.8)
     
     ax4.set_xlabel('Error Distance (Grid Units)', fontsize=12, fontweight='bold')
     ax4.set_ylabel('Cumulative Percentage (%)', fontsize=12, fontweight='bold')
-    ax4.set_title('Cumulative Error Distribution (CDF)', fontsize=14, fontweight='bold')
-    ax4.legend()
+    ax4.set_title('Cumulative Error Distribution - All 7 Algorithms', fontsize=14, fontweight='bold')
+    ax4.legend(fontsize=8, loc='lower right')
     ax4.grid(True, alpha=0.3)
     ax4.set_xlim([0, 5])
     
@@ -374,7 +413,11 @@ def main():
     
     for idx, (algo_name, errors_df) in enumerate([('KNN', knn_errors), 
                                                     ('WKNN', wknn_errors), 
-                                                    ('RF', rf_errors)]):
+                                                    ('RF', rf_errors),
+                                                    ('Hybrid', hybrid_errors),
+                                                    ('XGB', xgb_errors),
+                                                    ('DNN', dnn_errors),
+                                                    ('Ens', ensemble_errors)]):
         mean_errors_by_ap = []
         for min_ap, max_ap in ap_ranges:
             subset = errors_df[(errors_df['num_aps'] >= min_ap) & 
@@ -385,12 +428,12 @@ def main():
                 mean_errors_by_ap.append(0)
         
         ax5.plot(ap_ranges_plot, mean_errors_by_ap, marker='o', 
-                linewidth=2.5, markersize=8, label=algo_name, color=colors[idx])
+                linewidth=2, markersize=6, label=algo_name, color=colors[idx], alpha=0.8)
     
     ax5.set_xlabel('Number of Access Points Detected', fontsize=12, fontweight='bold')
     ax5.set_ylabel('Mean Error (Grid Units)', fontsize=12, fontweight='bold')
-    ax5.set_title('Performance vs AP Detection', fontsize=14, fontweight='bold')
-    ax5.legend()
+    ax5.set_title('Performance vs AP Detection (All 7)', fontsize=14, fontweight='bold')
+    ax5.legend(fontsize=8, loc='upper right')
     ax5.grid(True, alpha=0.3)
     
     # 6. Algorithm Performance Summary (Bottom Right)
@@ -450,9 +493,13 @@ def main():
     fig2, ax = plt.subplots(figsize=(10, 6))
     data_to_plot = [knn_errors['error_distance'], 
                     wknn_errors['error_distance'], 
-                    rf_errors['error_distance']]
+                    rf_errors['error_distance'],
+                    hybrid_errors['error_distance'],
+                    xgb_errors['error_distance'],
+                    dnn_errors[dnn_errors['error_distance'] < 25]['error_distance'],  # Filter DNN outliers
+                    ensemble_errors[ensemble_errors['error_distance'] < 25]['error_distance']]  # Filter Ensemble outliers
     
-    bp = ax.boxplot(data_to_plot, labels=algorithms, patch_artist=True,
+    bp = ax.boxplot(data_to_plot, tick_labels=algorithms, patch_artist=True,
                     medianprops=dict(color='red', linewidth=2),
                     boxprops=dict(facecolor='lightblue', alpha=0.7),
                     whiskerprops=dict(linewidth=1.5),
@@ -463,9 +510,11 @@ def main():
         patch.set_alpha(0.6)
     
     ax.set_ylabel('Error Distance (Grid Units)', fontsize=12, fontweight='bold')
-    ax.set_title('Algorithm Error Distribution - Box Plot Comparison', 
+    ax.set_title('Algorithm Error Distribution - Box Plot (All 7 Algorithms)', 
                 fontsize=14, fontweight='bold')
+    ax.set_xticklabels(algorithms, rotation=45, ha='right')
     ax.grid(axis='y', alpha=0.3)
+    ax.set_ylim([0, 10])  # Focus on main error range
     
     filename2 = f'boxplot_comparison_{timestamp}.png'
     plt.savefig(filename2, dpi=300, bbox_inches='tight', facecolor='white')

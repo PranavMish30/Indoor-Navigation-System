@@ -5,6 +5,14 @@ let showRefPoints = true;
 let currentPosition = null;
 let destinations = [];
 let navigationPath = [];
+let sessionId = 'user_' + Math.random().toString(36).substr(2, 9); // Unique session ID for Kalman filtering
+
+// Auto-tracking state
+let isTracking = false;
+let trackingInterval = null;
+let positionHistory = []; // Store last N positions for trail visualization
+const MAX_HISTORY = 20;
+const TRACKING_INTERVAL_MS = 2500; // Scan every 2.5 seconds
 
 let canvas, ctx;
 const SCALE = 100; // 100 pixels per grid unit
@@ -15,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     ctx = canvas.getContext('2d');
 
     document.getElementById('scanBtn').addEventListener('click', scanAndLocate);
+    document.getElementById('autoTrackBtn').addEventListener('click', toggleAutoTracking);
     document.getElementById('showRefPoints').addEventListener('click', toggleRefPoints);
     document.getElementById('floorSelect').addEventListener('change', event => {
         currentFloor = parseInt(event.target.value, 10);
@@ -91,6 +100,14 @@ async function scanAndLocate() {
     const statusDiv = document.getElementById('scanStatus');
     const algorithm = document.getElementById('algorithm').value;
 
+    // Don't allow manual scan during auto-tracking
+    if (isTracking) {
+        statusDiv.className = 'status info';
+        statusDiv.textContent = '⚠️ Stop real-time tracking first to perform manual scan';
+        statusDiv.classList.remove('hidden');
+        return;
+    }
+
     scanBtn.disabled = true;
     scanBtn.textContent = '⏳ Scanning...';
 
@@ -112,12 +129,17 @@ async function scanAndLocate() {
         }
 
         statusDiv.textContent = `🔍 Calculating position using ${algorithm.toUpperCase()}...`;
+        
+        const enableKalman = document.getElementById('enableKalman').checked;
+        
         const locateResponse = await fetch('/api/locate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 scan: scanData.aps,
-                algorithm: algorithm
+                algorithm: algorithm,
+                session_id: sessionId,
+                use_kalman: enableKalman && !algorithm.includes('kalman') // Don't double-apply Kalman
             })
         });
 
@@ -138,6 +160,19 @@ async function scanAndLocate() {
 
         statusDiv.className = 'status success';
         statusDiv.textContent = `✅ Position located! Floor ${position.floor}, Section: ${position.section}`;
+        
+        // Add to position history for trail visualization
+        if (isTracking && position) {
+            positionHistory.push({
+                x: position.x,
+                y: position.y,
+                floor: position.floor,
+                timestamp: Date.now()
+            });
+            if (positionHistory.length > MAX_HISTORY) {
+                positionHistory.shift(); // Remove oldest
+            }
+        }
     } catch (error) {
         statusDiv.className = 'status error';
         statusDiv.textContent = `❌ Error: ${error.message}`;
@@ -152,6 +187,129 @@ async function scanAndLocate() {
     } finally {
         scanBtn.disabled = false;
         scanBtn.textContent = '🔍 Scan & Locate';
+    }
+}
+
+function toggleAutoTracking() {
+    const btn = document.getElementById('autoTrackBtn');
+    const scanBtn = document.getElementById('scanBtn');
+    const statusDiv = document.getElementById('scanStatus');
+    
+    if (!isTracking) {
+        // Start tracking
+        isTracking = true;
+        btn.textContent = '⏹️ Stop Tracking';
+        btn.classList.remove('btn-accent');
+        btn.classList.add('btn-danger');
+        scanBtn.disabled = true;
+        
+        statusDiv.className = 'status info';
+        statusDiv.textContent = '🎯 Real-time tracking active - Auto-scanning every 2.5 seconds...';
+        statusDiv.classList.remove('hidden');
+        
+        // Clear history and perform first scan immediately
+        positionHistory = [];
+        performAutoScan();
+        
+        // Set up interval for continuous scanning
+        trackingInterval = setInterval(performAutoScan, TRACKING_INTERVAL_MS);
+    } else {
+        // Stop tracking
+        stopTracking();
+    }
+}
+
+function stopTracking() {
+    isTracking = false;
+    if (trackingInterval) {
+        clearInterval(trackingInterval);
+        trackingInterval = null;
+    }
+    
+    const btn = document.getElementById('autoTrackBtn');
+    const scanBtn = document.getElementById('scanBtn');
+    const statusDiv = document.getElementById('scanStatus');
+    
+    btn.textContent = '🎯 Start Real-Time Tracking';
+    btn.classList.remove('btn-danger');
+    btn.classList.add('btn-accent');
+    scanBtn.disabled = false;
+    
+    statusDiv.className = 'status info';
+    statusDiv.textContent = '⏸️ Real-time tracking stopped';
+}
+
+async function performAutoScan() {
+    const statusDiv = document.getElementById('scanStatus');
+    const algorithm = document.getElementById('algorithm').value;
+    
+    try {
+        const scanResponse = await fetch('/api/scan');
+        const scanData = await scanResponse.json();
+
+        if (scanData.error) {
+            console.error('Scan error:', scanData.error);
+            return;
+        }
+        
+        displayNetworks(scanData.aps);
+
+        if (scanData.count === 0) {
+            statusDiv.className = 'status error';
+            statusDiv.textContent = '❌ No BMSIT networks detected. Retrying...';
+            return;
+        }
+
+        const enableKalman = document.getElementById('enableKalman').checked;
+        
+        const locateResponse = await fetch('/api/locate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                scan: scanData.aps,
+                algorithm: algorithm,
+                session_id: sessionId,
+                use_kalman: enableKalman && !algorithm.includes('kalman')
+            })
+        });
+
+        const position = await locateResponse.json();
+        if (position.error) {
+            console.error('Locate error:', position.error);
+            return;
+        }
+
+        currentPosition = position;
+        currentPosition.num_aps = scanData.count;
+        currentFloor = Number(position.floor);
+
+        displayPosition(position);
+        if (position.nearest_neighbors) {
+            displayNearestNeighbors(position.nearest_neighbors);
+        }
+        document.getElementById('currentFloor').textContent = currentFloor;
+        document.getElementById('floorSelect').value = currentFloor;
+        
+        // Add to position history
+        positionHistory.push({
+            x: position.x,
+            y: position.y,
+            floor: position.floor,
+            timestamp: Date.now()
+        });
+        if (positionHistory.length > MAX_HISTORY) {
+            positionHistory.shift();
+        }
+        
+        drawFloorPlan();
+
+        statusDiv.className = 'status success';
+        const scanCount = positionHistory.length;
+        statusDiv.textContent = `✅ Tracking active (${scanCount} scans) - Floor ${position.floor}, Section: ${position.section}`;
+    } catch (error) {
+        console.error('Auto-scan error:', error);
+        statusDiv.className = 'status error';
+        statusDiv.textContent = `⚠️ Scan error: ${error.message}. Retrying...`;
     }
 }
 
@@ -183,7 +341,14 @@ function displayNetworks(aps) {
 function displayPosition(position) {
     document.getElementById('floorValue').textContent = `Floor ${position.floor}`;
     document.getElementById('sectionValue').textContent = position.section;
-    document.getElementById('coordValue').textContent = `(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`;
+    
+    // Show raw vs filtered coordinates if Kalman was applied
+    let coordText = `(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`;
+    if (position.x_raw !== undefined && position.y_raw !== undefined) {
+        coordText += ` [raw: (${position.x_raw.toFixed(2)}, ${position.y_raw.toFixed(2)})]`;
+    }
+    document.getElementById('coordValue').textContent = coordText;
+    
     const confidence = position.confidence.toFixed(1);
     const confidenceElem = document.getElementById('confidenceValue');
     confidenceElem.textContent = `${confidence}%`;
@@ -200,6 +365,11 @@ function displayPosition(position) {
     } else {
         confidenceElem.style.color = '#f44336';
     }
+    
+    // Display algorithm and Kalman status
+    document.getElementById('algorithmValue').textContent = position.algorithm || 'N/A';
+    document.getElementById('kalmanValue').textContent = position.kalman_enabled ? '✅ Active' : '❌ Disabled';
+    document.getElementById('kalmanValue').style.color = position.kalman_enabled ? '#4CAF50' : '#999';
 }
 
 function displayNearestNeighbors(neighbors) {
@@ -734,12 +904,68 @@ function drawNearestNeighbors(neighbors) {
     ctx.restore();
 }
 
+function drawPositionTrail() {
+    // Filter history for current floor
+    const floorHistory = positionHistory.filter(p => p.floor === currentFloor);
+    
+    if (floorHistory.length < 2) return;
+    
+    ctx.save();
+    
+    // Draw trail line
+    ctx.strokeStyle = '#FF9800';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = 0.6;
+    
+    ctx.beginPath();
+    floorHistory.forEach((pos, index) => {
+        const canvasPos = gridToCanvas(pos.x, pos.y);
+        if (index === 0) {
+            ctx.moveTo(canvasPos.x, canvasPos.y);
+        } else {
+            ctx.lineTo(canvasPos.x, canvasPos.y);
+        }
+    });
+    ctx.stroke();
+    
+    // Draw trail points (older = more transparent)
+    floorHistory.forEach((pos, index) => {
+        const canvasPos = gridToCanvas(pos.x, pos.y);
+        const age = (floorHistory.length - index) / floorHistory.length;
+        const alpha = 0.3 + (1 - age) * 0.5; // Fade from 0.3 to 0.8
+        const radius = 4 + (1 - age) * 4; // Grow from 4 to 8
+        
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = '#FF9800';
+        ctx.beginPath();
+        ctx.arc(canvasPos.x, canvasPos.y, radius, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // Add white center to older points
+        if (age > 0.5) {
+            ctx.fillStyle = '#FFF';
+            ctx.beginPath();
+            ctx.arc(canvasPos.x, canvasPos.y, radius * 0.4, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+    });
+    
+    ctx.restore();
+}
+
 function drawCurrentPosition() {
+    // Draw position history trail if tracking
+    if (isTracking && positionHistory.length > 1) {
+        drawPositionTrail();
+    }
+    
     const pos = gridToCanvas(currentPosition.x, currentPosition.y);
     ctx.save();
     
-    // Pulsing outer circle (static in canvas)
-    ctx.strokeStyle = '#4CAF50';
+    // Pulsing outer circle (animated for tracking mode)
+    ctx.strokeStyle = isTracking ? '#FF9800' : '#4CAF50';
     ctx.lineWidth = 4;
     ctx.globalAlpha = 0.4;
     ctx.beginPath();
@@ -753,9 +979,9 @@ function drawCurrentPosition() {
     ctx.stroke();
     
     // Main position circle
-    ctx.shadowColor = 'rgba(76, 175, 80, 0.5)';
+    ctx.shadowColor = isTracking ? 'rgba(255, 152, 0, 0.5)' : 'rgba(76, 175, 80, 0.5)';
     ctx.shadowBlur = 10;
-    ctx.fillStyle = '#4CAF50';
+    ctx.fillStyle = isTracking ? '#FF9800' : '#4CAF50';
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, 20, 0, 2 * Math.PI);
     ctx.fill();
@@ -768,20 +994,22 @@ function drawCurrentPosition() {
     ctx.fill();
     
     // Label background
-    ctx.shadowColor = 'rgba(76, 175, 80, 0.5)';
+    ctx.shadowColor = isTracking ? 'rgba(255, 152, 0, 0.5)' : 'rgba(76, 175, 80, 0.5)';
     ctx.shadowBlur = 8;
-    ctx.fillStyle = '#4CAF50';
+    ctx.fillStyle = isTracking ? '#FF9800' : '#4CAF50';
     ctx.beginPath();
-    ctx.roundRect(pos.x - 80, pos.y - 70, 160, 35, 8);
+    const labelText = isTracking ? 'TRACKING...' : 'YOU ARE HERE';
+    const labelWidth = isTracking ? 130 : 160;
+    ctx.roundRect(pos.x - labelWidth/2, pos.y - 70, labelWidth, 35, 8);
     ctx.fill();
     
-    // "YOU ARE HERE" label
+    // Label text
     ctx.shadowColor = 'transparent';
     ctx.fillStyle = '#FFF';
     ctx.font = 'bold 20px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('YOU ARE HERE', pos.x, pos.y - 52);
+    ctx.fillText(labelText, pos.x, pos.y - 52);
     
     // Coordinates
     ctx.fillStyle = '#333';
