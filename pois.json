@@ -28,9 +28,9 @@
   "Middle Stairs (1F)":    { "floor": 1, "x": 10, "y": 2.5, "type": "stairs", "side" : "bottom" },
   "Engineering Geology Lab":     { "floor": 1, "x": 9, "y": 2.5, "type": "lab", "side" : "top" },
   "Computer Aided Drafting and Design Lab": { "floor": 1, "x": 11, "y": 2.5, "type": "lab", "side" : "bottom" },
-  "Environmental Engineering Lab": { "floor": 1, "x": 12, "y": 2.5, "type": "lab" },
+  "Environmental Engineering Lab": { "floor": 1, "x": 12, "y": 2.5, "type": "lab","side" : "top" },
   "Department of Civil Engineering":   { "floor": 1, "x": 14, "y": 2.5, "type": "misc. room", "side" : "top" },
   "Research Lab":    { "floor": 1, "x": 18, "y": 2.5, "type": "lab", "side" : "bottom"},
-  "Right Stairs (1F)":     { "floor": 1, "x": 20, "y": 3, "type": "stairs" },
-  "Right Lift (1F)": { "floor": 1, "x": 22, "y": 3, "type": "lift" }
+  "Right Stairs (1F)":     { "floor": 1, "x": 20, "y": 3, "type": "stairs", "side" : "top"},
+  "Right Lift (1F)": { "floor": 1, "x": 22, "y": 3, "type": "lift", "side" : "top"}
 }

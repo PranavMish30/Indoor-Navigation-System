@@ -4,27 +4,30 @@ from flask_cors import CORS
 import subprocess
 import re
 import os
+import time
+from functools import lru_cache
 
 from preprocessing import FingerprintDatabase
-from algorithms import KNN, WeightedKNN, RandomForestPositioning, HybridWKNNRF
+from algorithms import HybridWKNNRF, SmartEnsemble, KalmanFilter
 from navigation import build_graph, find_closest_node, shortest_path
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
 
 db = None
-knn_algo = None
-wknn_algo = None
-rf_algo = None
 hybrid_algo = None
+ensemble_algo = None
 nav_graph = None
+
+# Session-based Kalman filters for real-time tracking
+user_sessions = {}  # {session_id: {'kalman': KalmanFilter, 'last_update': timestamp}}
 
 # LOAD POIs from floor_plan.json at startup
 with open('pois.json', 'r', encoding='utf-8') as f:
     POIS = json.load(f)
 
 def initialize_system():
-    global db, knn_algo, wknn_algo, rf_algo, hybrid_algo, nav_graph
+    global db, hybrid_algo, ensemble_algo, nav_graph
     print("\n" + "="*70)
     print("🚀 Initializing Indoor Positioning System")
     print("="*70)
@@ -34,10 +37,10 @@ def initialize_system():
     db.create_reference_points()
     db.get_stats()
     print("\n🔧 Initializing positioning algorithms...")
-    knn_algo = KNN(db.reference_points, db.all_bssids, k=3)
-    wknn_algo = WeightedKNN(db.reference_points, db.all_bssids, k=4)
-    rf_algo = RandomForestPositioning(db.reference_points, db.all_bssids)
     hybrid_algo = HybridWKNNRF(db.reference_points, db.all_bssids, k=4)
+    print("   ✓ Hybrid (WKNN + RF) initialized")
+    ensemble_algo = SmartEnsemble(db.reference_points, db.all_bssids, [hybrid_algo])
+    print("   ✓ Smart Ensemble with Kalman Filter initialized")
     nav_graph = build_graph(db.reference_points, pois=POIS)
     print("✅ System initialized successfully!")
     print("="*70 + "\n")
@@ -46,9 +49,16 @@ initialize_system()
 
 @app.route('/')
 def index():
+    # Desktop version (original)
     return send_from_directory('static', 'index.html')
 
+@app.route('/mobile')
+def mobile():
+    # Mobile version (Google Maps style)
+    return send_from_directory('static', 'index_mobile.html')
+
 @app.route('/api/health', methods=['GET'])
+@lru_cache(maxsize=1)
 def health_check():
     return jsonify({
         'status': 'healthy',
@@ -56,7 +66,7 @@ def health_check():
         'total_bssids': len(db.all_bssids),
         'floors': sorted(db.reference_points['floor'].unique().tolist()),
         'sections': sorted(db.reference_points['section'].unique().tolist()),
-        'algorithms': ['knn', 'wknn', 'rf', 'hybrid']
+        'algorithms': ['hybrid', 'ensemble', 'ensemble-kalman']
     })
 
 @app.route('/api/scan', methods=['GET'])
@@ -111,26 +121,65 @@ def scan_wifi():
 
 @app.route('/api/locate', methods=['POST'])
 def locate():
+    import time
     data = request.json
     current_scan = data.get('scan', {})
     algorithm = data.get('algorithm', 'wknn')
+    session_id = data.get('session_id', 'default')  # Track user session for Kalman filtering
+    use_kalman = data.get('use_kalman', False)  # Enable Kalman filtering
+    
     if not current_scan:
         return jsonify({'error': 'No WiFi scan data provided'}), 400
     current_scan = {str(k): int(v) for k, v in current_scan.items()}
+    
     try:
-        if algorithm == 'knn':
-            result = knn_algo.estimate_position(current_scan)
-        elif algorithm == 'wknn':
-            result = wknn_algo.estimate_position(current_scan)
-        elif algorithm == 'rf':
-            result = rf_algo.estimate_position(current_scan)
-        elif algorithm == 'hybrid':
+        # Get position estimate from selected algorithm
+        if algorithm == 'hybrid':
             result = hybrid_algo.estimate_position(current_scan)
+        elif algorithm == 'ensemble':
+            result = ensemble_algo.estimate_position(current_scan, use_kalman=False)
+        elif algorithm == 'ensemble-kalman':
+            # Smart Ensemble with built-in Kalman filter
+            result = ensemble_algo.estimate_position(current_scan, use_kalman=True)
+            result['kalman_enabled'] = True
         else:
             return jsonify({'error': f'Unknown algorithm: {algorithm}'}), 400
+        
+        # Apply session-based Kalman filtering if requested
+        if use_kalman and algorithm not in ['ensemble-kalman']:
+            # Initialize session if needed
+            if session_id not in user_sessions:
+                user_sessions[session_id] = {
+                    'kalman': KalmanFilter(process_variance=0.01, measurement_variance=0.5),
+                    'last_update': time.time()
+                }
+            
+            session = user_sessions[session_id]
+            
+            # Clean up old sessions (older than 5 minutes)
+            current_time = time.time()
+            sessions_to_remove = [sid for sid, sess in user_sessions.items() 
+                                 if current_time - sess['last_update'] > 300]
+            for sid in sessions_to_remove:
+                del user_sessions[sid]
+            
+            # Apply Kalman filter
+            x_raw = result['x']
+            y_raw = result['y']
+            x_filtered, y_filtered = session['kalman'].update(x_raw, y_raw)
+            
+            result['x_raw'] = x_raw
+            result['y_raw'] = y_raw
+            result['x'] = float(x_filtered)
+            result['y'] = float(y_filtered)
+            result['kalman_enabled'] = True
+            
+            session['last_update'] = current_time
+        
         return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/reference-points', methods=['GET'])
 def get_reference_points():
@@ -174,8 +223,12 @@ def get_stats():
 
 @app.route('/api/destinations', methods=['GET'])
 def list_destinations():
+    # Reload POIs from file to get latest changes
+    with open('pois.json', 'r', encoding='utf-8') as f:
+        pois = json.load(f)
+    
     result = []
-    for label, info in POIS.items():
+    for label, info in pois.items():
         result.append({
             "label": label,
             "floor": info["floor"],

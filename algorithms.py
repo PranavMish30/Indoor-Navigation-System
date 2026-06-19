@@ -266,3 +266,219 @@ class HybridWKNNRF(PositioningAlgorithm):
             'section_confidence': float(section_conf)
         }
         return result
+
+
+class XGBoostPositioning(PositioningAlgorithm):
+    """XGBoost-based positioning with gradient boosting"""
+    def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str]):
+        super().__init__(reference_points, all_bssids)
+        self.model_x = None
+        self.model_y = None
+        self.model_floor = None
+        self.model_section = None
+        self.train()
+
+    def train(self):
+        try:
+            import xgboost as xgb
+        except ImportError:
+            raise ImportError("XGBoost not installed. Run: pip install xgboost")
+        
+        X = []
+        y_x = []
+        y_y = []
+        y_floor = []
+        y_section = []
+        
+        for idx, ref_point in self.reference_points.iterrows():
+            rssi_vector = self.get_reference_rssi_vector(ref_point)
+            X.append(rssi_vector)
+            y_x.append(ref_point['x'])
+            y_y.append(ref_point['y'])
+            y_floor.append(ref_point['floor'])
+            y_section.append(ref_point['section'])
+        
+        X = np.array(X)
+        y_x = np.array(y_x)
+        y_y = np.array(y_y)
+        y_floor = np.array(y_floor)
+        
+        # Encode sections as integers
+        from sklearn.preprocessing import LabelEncoder
+        self.section_encoder = LabelEncoder()
+        y_section_encoded = self.section_encoder.fit_transform(y_section)
+        
+        # Train XGBoost models
+        self.model_x = xgb.XGBRegressor(
+            n_estimators=200,
+            max_depth=8,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        self.model_y = xgb.XGBRegressor(
+            n_estimators=200,
+            max_depth=8,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        self.model_floor = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        self.model_section = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        
+        self.model_x.fit(X, y_x)
+        self.model_y.fit(X, y_y)
+        self.model_floor.fit(X, y_floor)
+        self.model_section.fit(X, y_section_encoded)
+
+    def estimate_position(self, current_scan: Dict[str, int]) -> Dict:
+        current_vector = self.prepare_rssi_vector(current_scan).reshape(1, -1)
+        
+        x = float(self.model_x.predict(current_vector)[0])
+        y = float(self.model_y.predict(current_vector)[0])
+        floor = int(self.model_floor.predict(current_vector)[0])
+        section_encoded = self.model_section.predict(current_vector)[0]
+        section = str(self.section_encoder.inverse_transform([section_encoded])[0])
+        
+        floor_proba = self.model_floor.predict_proba(current_vector)[0]
+        section_proba = self.model_section.predict_proba(current_vector)[0]
+        confidence = (max(floor_proba) + max(section_proba)) / 2 * 100
+        
+        result = {
+            'x': float(x),
+            'y': float(y),
+            'floor': int(floor),
+            'section': str(section),
+            'algorithm': 'XGBoost',
+            'confidence': float(confidence),
+            'floor_confidence': float(max(floor_proba) * 100),
+            'section_confidence': float(max(section_proba) * 100)
+        }
+        return result
+
+
+class KalmanFilter:
+    """Kalman Filter for smoothing position estimates"""
+    def __init__(self, process_variance=0.05, measurement_variance=0.3):
+        # Increased process_variance: system changes more (walking)
+        # Decreased measurement_variance: trust measurements more
+        self.process_variance = process_variance
+        self.measurement_variance = measurement_variance
+        self.reset()
+    
+    def reset(self):
+        self.x_estimate = None
+        self.y_estimate = None
+        self.x_error = 1.0
+        self.y_error = 1.0
+    
+    def update(self, x_measured, y_measured):
+        if self.x_estimate is None:
+            # First measurement
+            self.x_estimate = x_measured
+            self.y_estimate = y_measured
+            return self.x_estimate, self.y_estimate
+        
+        # Predict
+        x_predict = self.x_estimate
+        y_predict = self.y_estimate
+        x_error_predict = self.x_error + self.process_variance
+        y_error_predict = self.y_error + self.process_variance
+        
+        # Update
+        x_kalman_gain = x_error_predict / (x_error_predict + self.measurement_variance)
+        y_kalman_gain = y_error_predict / (y_error_predict + self.measurement_variance)
+        
+        self.x_estimate = x_predict + x_kalman_gain * (x_measured - x_predict)
+        self.y_estimate = y_predict + y_kalman_gain * (y_measured - y_predict)
+        
+        self.x_error = (1 - x_kalman_gain) * x_error_predict
+        self.y_error = (1 - y_kalman_gain) * y_error_predict
+        
+        return self.x_estimate, self.y_estimate
+
+
+class SmartEnsemble(PositioningAlgorithm):
+    """Intelligent ensemble that weights algorithms by confidence and performance"""
+    def __init__(self, reference_points: pd.DataFrame, all_bssids: List[str], algorithms: List):
+        super().__init__(reference_points, all_bssids)
+        self.algorithms = algorithms
+        # More responsive Kalman filter for real-time tracking
+        self.kalman_filter = KalmanFilter(process_variance=0.08, measurement_variance=0.25)
+    
+    def estimate_position(self, current_scan: Dict[str, int], use_kalman=True) -> Dict:
+        # Get predictions from all algorithms
+        predictions = []
+        for algo in self.algorithms:
+            try:
+                result = algo.estimate_position(current_scan)
+                predictions.append(result)
+            except Exception as e:
+                continue
+        
+        if not predictions:
+            raise ValueError("No algorithm produced a valid prediction")
+        
+        # Filter out low-confidence predictions (< 70%)
+        high_conf_predictions = [p for p in predictions if p['confidence'] >= 70]
+        if high_conf_predictions:
+            predictions = high_conf_predictions
+        
+        # Weight by SQUARED confidence (favor high-confidence predictions more)
+        confidence_squared = [p['confidence'] ** 2 for p in predictions]
+        total_confidence = sum(confidence_squared)
+        weights = [c / total_confidence for c in confidence_squared]
+        
+        # Weighted average for coordinates
+        x_weighted = sum(p['x'] * w for p, w in zip(predictions, weights))
+        y_weighted = sum(p['y'] * w for p, w in zip(predictions, weights))
+        
+        # Apply Kalman filtering
+        if use_kalman:
+            x_filtered, y_filtered = self.kalman_filter.update(x_weighted, y_weighted)
+        else:
+            x_filtered, y_filtered = x_weighted, y_weighted
+        
+        # Voting for floor and section (weighted)
+        floor_votes = {}
+        section_votes = {}
+        
+        for pred, weight in zip(predictions, weights):
+            floor = pred['floor']
+            section = pred['section']
+            floor_votes[floor] = floor_votes.get(floor, 0) + weight
+            section_votes[section] = section_votes.get(section, 0) + weight
+        
+        best_floor = max(floor_votes, key=floor_votes.get)
+        best_section = max(section_votes, key=section_votes.get)
+        
+        # Average confidence
+        avg_confidence = sum(p['confidence'] for p in predictions) / len(predictions)
+        
+        result = {
+            'x': float(x_filtered),
+            'y': float(y_filtered),
+            'floor': int(best_floor),
+            'section': str(best_section),
+            'algorithm': 'Smart-Ensemble',
+            'confidence': float(avg_confidence),
+            'num_algorithms': len(predictions),
+            'individual_predictions': predictions
+        }
+        return result

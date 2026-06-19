@@ -2,15 +2,26 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BMSIT Indoor Positioning System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Indoor Navigation</title>
     <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
-    <div class="container">
+    <!-- Loading Screen -->
+    <div id="loadingScreen" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; color: white;">
+        <div style="text-align: center;">
+            <h2>Loading...</h2>
+            <div style="margin-top: 20px;">
+                <div class="spinner" style="border-color: rgba(255,255,255,0.3); border-top-color: white; width: 40px; height: 40px; border-width: 4px;"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Main Map Container -->
+    <div id="mapContainer" class="map-container" style="opacity: 0; transition: opacity 0.5s;">
         <!-- Header -->
         <header>
-            <h1>🏛️ BMSIT Indoor Positioning System</h1>
+            <h1>BMSIT Indoor Positioning System</h1>
             <p class="subtitle">WiFi-Based Indoor Navigation</p>
         </header>
 
@@ -19,27 +30,21 @@
             <!-- Left Panel: Controls -->
             <div class="left-panel">
                 <div class="card">
-                    <h2>📍 Position Detection</h2>
+                    <h2>Position Detection</h2>
                     
-                    <div class="control-group">
-                        <label for="algorithm">Algorithm:</label>
-                        <select id="algorithm">
-                            <option value="wknn" selected>Weighted KNN (Best)</option>
-                            <option value="knn">K-Nearest Neighbors</option>
-                            <option value="rf">Random Forest</option>
-                            <option value="hybrid">Hybrid (RF + WKNN)</option>
-                        </select>
-                    </div>
-
-                    <button id="scanBtn" class="btn btn-primary">
-                        🔍 Scan & Locate
+                    <button id="getCurrentLocationBtn" class="btn btn-primary" data-tooltip="Keyboard: S" style="width: 100%; margin-bottom: 10px;">
+                        Get Current Location
+                    </button>
+                    
+                    <button id="startTrackingBtn" class="btn btn-accent" style="width: 100%;" data-tooltip="Keyboard: T">
+                        Start Real-Time Tracking
                     </button>
 
                     <div id="scanStatus" class="status hidden"></div>
                 </div>
 
                 <div class="card">
-                    <h2>🧭 Navigation</h2>
+                    <h2>Navigation</h2>
                     <div>
                         <label for="destinationSelect">Go to:</label>
                         <select id="destinationSelect"></select>
@@ -49,7 +54,7 @@
                 </div>
 
                 <div class="card">
-                    <h2>📌 Current Position</h2>
+                    <h2>Current Position</h2>
                     <div id="positionInfo" class="position-info">
                         <div class="info-row">
                             <span class="label">Floor:</span>
@@ -65,38 +70,19 @@
                         </div>
                         <div class="info-row">
                             <span class="label">Confidence:</span>
-                            <span id="confidenceValue" class="value">-</span>
+                            <span id="confidenceValue" class="value" data-tooltip="Higher is better">-</span>
                         </div>
                         <div class="info-row">
                             <span class="label">APs Detected:</span>
                             <span id="apsValue" class="value">-</span>
                         </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2>📡 Detected Networks</h2>
-                    <div id="networkList" class="network-list">
-                        <p class="placeholder">Click "Scan & Locate" to detect networks</p>
-                    </div>
-                </div>
-        
-                <div class="card">
-                    <h2>📊 System Status</h2>
-                    <div id="systemStats" class="system-stats">
-                        <div class="stat-item">
-                            <span class="stat-label">Reference Points:</span>
-                            <span id="refPointsCount" class="stat-value">-</span>
+                        <div class="info-row">
+                            <span class="label">Algorithm:</span>
+                            <span id="algorithmValue" class="value">-</span>
                         </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Total APs:</span>
-                            <span id="totalAPs" class="stat-value">-</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Status:</span>
-                            <span id="systemStatus" class="stat-value status-indicator">
-                                <span class="status-dot"></span> Checking...
-                            </span>
+                        <div class="info-row">
+                            <span class="label">Kalman Filter:</span>
+                            <span id="kalmanValue" class="value">-</span>
                         </div>
                     </div>
                 </div>
@@ -105,13 +91,13 @@
             <!-- Right Panel: Floor Plan -->
             <div class="right-panel">
                 <div class="card floor-plan-card">
-                    <h2>🗺️ Floor Plan - Floor <span id="currentFloor">0</span></h2>
+                    <h2>Floor Plan - Floor <span id="currentFloor">0</span></h2>
                     
                     <div class="floor-controls">
                         <label for="floorSelect">Floor:</label>
                         <select id="floorSelect" style="margin-left:8px; margin-right:8px;"></select>
                         <button id="showRefPoints" class="btn btn-small">
-                            👁️ Toggle Reference Points
+                            Toggle Reference Points
                         </button>
                     </div>
 
@@ -140,7 +126,7 @@
                 </div>
 
                 <div class="card">
-                    <h2>🎯 Nearest Reference Points</h2>
+                    <h2>Nearest Reference Points</h2>
                     <div id="nearestNeighbors" class="neighbors-list">
                         <p class="placeholder">Scan to see nearest reference points</p>
                     </div>
